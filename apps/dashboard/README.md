@@ -2,7 +2,7 @@
 
 Local human control surface for the Odoo Development Factory.
 
-The dashboard will inspect the factory, product, and delivery repositories; present their derived state; and submit validated commands and approvals to the orchestration core. It will not become the authoritative store for requirements, plans, approvals, releases, or product source code.
+The dashboard will inspect configured platform, factory, product, and delivery repositories; present their derived state; and submit validated commands and approvals to the orchestration core. It will not become the authoritative store for discovery, requirements, plans, approvals, releases, or product source code.
 
 ## Boundaries
 

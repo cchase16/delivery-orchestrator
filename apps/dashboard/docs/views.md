@@ -8,6 +8,14 @@ Repository health, configuration resolution, Odoo version, active release, avail
 
 Incoming requirement documents, sidecar status, review findings, dependency readiness, and missing artifacts.
 
+## Discovery and Decisions
+
+Source analysis, field-map coverage, gaps, questionnaires, unresolved decisions, protected evidence references, and requirement-submission readiness.
+
+## System Plan and Work Packages
+
+Requirement dependency graph, system-plan revision, proposed grouping, conflict groups, sequencing, concurrency, target releases, and work-package approval.
+
 ## Run Plan
 
 Phases, tasks, dependencies, requested and actual models, validation gates, approval points, and completion evidence.

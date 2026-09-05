@@ -189,12 +189,25 @@
     "startRunPayload": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["run_kind", "requirement", "run_plan", "product_base_commit"],
+      "required": ["run_kind", "input_artifacts"],
       "properties": {
-        "run_kind": { "enum": ["requirement_intake", "implementation", "validation", "release"] },
-        "requirement": { "$ref": "#/$defs/artifactReference" },
-        "run_plan": { "$ref": "#/$defs/artifactReference" },
+        "run_kind": {
+          "enum": [
+            "requirements_discovery",
+            "requirement_intake",
+            "system_planning",
+            "implementation",
+            "validation",
+            "release"
+          ]
+        },
+        "input_artifacts": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/artifactReference" }
+        },
         "product_base_commit": { "type": "string", "pattern": "^[A-Fa-f0-9]{7,64}$" },
+        "database_baseline": { "$ref": "#/$defs/artifactReference" },
         "supersedes_run_id": { "type": "string", "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$" }
       }
     },

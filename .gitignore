@@ -1,0 +1,22 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Local runtime state and generated output
+.factory-local/
+artifacts/
+logs/
+tmp/
+
+# Tool environments and caches
+.venv/
+__pycache__/
+.pytest_cache/
+node_modules/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

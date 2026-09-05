@@ -1,15 +1,12 @@
 # Schemas
 
-Versioned, machine-readable schemas belong here. Expected contracts include:
+Versioned, machine-readable cross-factory contracts belong here. Expected contracts include:
 
-- `factory.yaml`
-- `factory.lock`
-- System and delivery configuration
-- Requirements
-- Implementation run plans
-- Execution manifests
-- Validation evidence
-- Release manifests
+- Submission and source provenance
+- Canonical requirement revisions and human dispositions
+- System plans and work packages
+- Commands, approvals, workflow events, and run state
+- Database baselines, execution manifests, validation evidence, and releases
 
 Schema changes must define their compatibility and migration behavior.
 
@@ -19,3 +16,18 @@ Schema changes must define their compatibility and migration behavior.
 - `approvals/approval.schema.json`
 - `workflow/workflow-event.schema.json`
 - `workflow/run-state.schema.json`
+
+## Scaffolded contract areas
+
+- `submissions/`
+- `requirements/`
+- `requirement-decisions/`
+- `system-plans/`
+- `work-packages/`
+- `database-baselines/`
+- `releases/`
+- `run-plans/`
+- `executions/`
+- `evidence/`
+- `model-profiles/`
+- `acceptance-traceability/`

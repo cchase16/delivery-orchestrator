@@ -8,7 +8,9 @@ The orchestrator is the only component authorized to change run or task state. C
 
 ## Run kinds
 
-- `requirement_intake` — review a submitted requirement, create sidecars and a human-readable run plan, and stop for approval.
+- `requirements_discovery` — coordinate source analysis, field mapping, gaps, questionnaires, decisions, and requirement submission.
+- `requirement_intake` — normalize and review a submitted requirement revision and stop for its disposition.
+- `system_planning` — create or revise the overall system plan and proposed work packages.
 - `implementation` — implement an approved plan in an isolated product worktree.
 - `validation` — perform broader testing against a declared product revision and database lineage.
 - `release` — assemble and approve an exact release candidate.

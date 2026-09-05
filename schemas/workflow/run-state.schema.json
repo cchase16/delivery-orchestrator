@@ -19,7 +19,16 @@
     "schema_version": { "const": 1 },
     "system_id": { "type": "string", "minLength": 1, "maxLength": 200 },
     "run_id": { "type": "string", "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$" },
-    "run_kind": { "enum": ["requirement_intake", "implementation", "validation", "release"] },
+    "run_kind": {
+      "enum": [
+        "requirements_discovery",
+        "requirement_intake",
+        "system_planning",
+        "implementation",
+        "validation",
+        "release"
+      ]
+    },
     "revision": { "type": "integer", "minimum": 0 },
     "state": { "$ref": "#/$defs/runState" },
     "resume_state": { "$ref": "#/$defs/resumeState" },

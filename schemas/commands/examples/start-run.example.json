@@ -21,18 +21,20 @@
   },
   "payload": {
     "run_kind": "requirement_intake",
-    "requirement": {
-      "artifact_id": "REQ-0001",
-      "revision": 1,
-      "path": "requirements/Odoo_Form_Context_Menu_Customization_Design.docx",
-      "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
-    },
-    "run_plan": {
-      "artifact_id": "PLAN-REQ-0001-001",
-      "revision": 1,
-      "path": "run-plans/Odoo_Form_Context_Menu_Implementation_Run_Plan.docx",
-      "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
-    },
+    "input_artifacts": [
+      {
+        "artifact_id": "REQ-0001",
+        "revision": 1,
+        "path": "requirements/Odoo_Form_Context_Menu_Customization_Design.docx",
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      {
+        "artifact_id": "PLAN-REQ-0001-001",
+        "revision": 1,
+        "path": "run-plans/Odoo_Form_Context_Menu_Implementation_Run_Plan.docx",
+        "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+      }
+    ],
     "product_base_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   },
   "note": "Start the first requirement-intake pilot."
