@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:odoo-development-factory:schema:approval:1",
+  "title": "Human Approval Record",
+  "description": "Immutable human approval or rejection bound to exact workflow inputs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "approval_id",
+    "gate_id",
+    "decision",
+    "issued_at",
+    "issued_by",
+    "target",
+    "bindings"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "approval_id": {
+      "type": "string",
+      "pattern": "^APR-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+    },
+    "gate_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "decision": { "enum": ["approved", "rejected"] },
+    "issued_at": { "type": "string", "format": "date-time" },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "issued_by": { "$ref": "#/$defs/humanActor" },
+    "target": { "$ref": "#/$defs/target" },
+    "bindings": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/binding" }
+    },
+    "evidence": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/binding" },
+      "default": []
+    },
+    "comments": { "type": "string", "maxLength": 10000 },
+    "supersedes_approval_id": {
+      "type": "string",
+      "pattern": "^APR-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+    }
+  },
+  "$defs": {
+    "humanActor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actor_id", "actor_type", "role", "authentication_method"],
+      "properties": {
+        "actor_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "actor_type": { "const": "human" },
+        "display_name": { "type": "string", "maxLength": 200 },
+        "role": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "authentication_method": { "type": "string", "minLength": 1, "maxLength": 100 }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["system_id", "run_id", "run_revision"],
+      "properties": {
+        "system_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "run_id": { "type": "string", "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$" },
+        "run_revision": { "type": "integer", "minimum": 0 },
+        "task_id": { "type": "string", "minLength": 1, "maxLength": 200 }
+      }
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["binding_type", "artifact_id", "digest"],
+      "properties": {
+        "binding_type": {
+          "enum": [
+            "requirement",
+            "requirement_sidecar",
+            "run_plan",
+            "run_plan_sidecar",
+            "product_commit",
+            "evidence_manifest",
+            "database_rehearsal",
+            "release_manifest",
+            "exception"
+          ]
+        },
+        "artifact_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "revision": { "type": "integer", "minimum": 1 },
+        "path": { "type": "string", "maxLength": 1000 },
+        "digest": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["algorithm", "value"],
+          "properties": {
+            "algorithm": { "enum": ["sha256", "git_sha1", "git_sha256"] },
+            "value": { "type": "string", "pattern": "^[A-Fa-f0-9]{40,64}$" }
+          }
+        }
+      }
+    }
+  }
+}

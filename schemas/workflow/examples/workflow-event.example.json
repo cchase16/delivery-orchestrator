@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "event_id": "EVT-2026-09-0001",
+  "event_type": "run_state_changed",
+  "run_id": "RUN-2026-09-0001",
+  "sequence": 1,
+  "run_revision": 1,
+  "occurred_at": "2026-09-05T14:30:01-04:00",
+  "recorded_by": "local-orchestrator",
+  "caused_by_command_id": "CMD-2026-09-0001",
+  "previous_run_state": "requested",
+  "current_run_state": "preflight",
+  "details": {
+    "reason": "Start-run command accepted."
+  }
+}

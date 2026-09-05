@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:odoo-development-factory:schema:run-state:1",
+  "title": "Derived Run State",
+  "description": "Reconstructible projection of a run and its task states.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "system_id",
+    "run_id",
+    "run_kind",
+    "revision",
+    "state",
+    "updated_at",
+    "tasks"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "system_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "run_id": { "type": "string", "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$" },
+    "run_kind": { "enum": ["requirement_intake", "implementation", "validation", "release"] },
+    "revision": { "type": "integer", "minimum": 0 },
+    "state": { "$ref": "#/$defs/runState" },
+    "resume_state": { "$ref": "#/$defs/resumeState" },
+    "current_task_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "open_gate_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "wait_reason": { "type": "string", "maxLength": 4000 },
+    "blocked_reason": { "type": "string", "maxLength": 4000 },
+    "last_event_id": { "type": "string", "pattern": "^EVT-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$" },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "tasks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/taskProjection" }
+    }
+  },
+  "$defs": {
+    "runState": {
+      "enum": [
+        "requested",
+        "preflight",
+        "ready",
+        "running",
+        "awaiting_approval",
+        "validating",
+        "paused",
+        "blocked",
+        "completed",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "taskState": {
+      "enum": [
+        "pending",
+        "ready",
+        "dispatched",
+        "running",
+        "blocked",
+        "completed",
+        "skipped",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "resumeState": {
+      "enum": [
+        "preflight",
+        "ready",
+        "running",
+        "awaiting_approval",
+        "validating",
+        "blocked"
+      ]
+    },
+    "taskProjection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task_id", "state", "depends_on"],
+      "properties": {
+        "task_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "state": { "$ref": "#/$defs/taskState" },
+        "depends_on": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "uniqueItems": true
+        },
+        "execution_id": { "type": "string", "maxLength": 200 },
+        "blocked_reason": { "type": "string", "maxLength": 4000 }
+      }
+    }
+  }
+}

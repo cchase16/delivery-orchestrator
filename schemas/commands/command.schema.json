@@ -1,0 +1,235 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:odoo-development-factory:schema:command:1",
+  "title": "Factory Command",
+  "description": "Immutable request for the factory orchestrator to perform one state-guarded action.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "command_id",
+    "command_type",
+    "idempotency_key",
+    "issued_at",
+    "issued_by",
+    "source",
+    "target",
+    "preconditions",
+    "payload"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "command_id": {
+      "type": "string",
+      "pattern": "^CMD-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+    },
+    "command_type": {
+      "enum": [
+        "start_run",
+        "start_task",
+        "pause_run",
+        "resume_run",
+        "cancel_run",
+        "retry_task",
+        "submit_manual_result",
+        "request_replan"
+      ]
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 200
+    },
+    "issued_at": { "type": "string", "format": "date-time" },
+    "issued_by": { "$ref": "#/$defs/actor" },
+    "source": {
+      "enum": ["dashboard", "cli", "orchestrator", "requirements_factory"]
+    },
+    "target": { "$ref": "#/$defs/target" },
+    "preconditions": { "$ref": "#/$defs/preconditions" },
+    "payload": { "type": "object" },
+    "note": {
+      "type": "string",
+      "maxLength": 4000
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "command_type": { "const": "start_run" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/startRunPayload" } } }
+    },
+    {
+      "if": { "properties": { "command_type": { "const": "start_task" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/startTaskPayload" } } }
+    },
+    {
+      "if": { "properties": { "command_type": { "enum": ["pause_run", "cancel_run", "retry_task", "request_replan"] } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/reasonPayload" } } }
+    },
+    {
+      "if": { "properties": { "command_type": { "const": "resume_run" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/resumePayload" } } }
+    },
+    {
+      "if": { "properties": { "command_type": { "const": "submit_manual_result" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/manualResultPayload" } } }
+    }
+  ],
+  "$defs": {
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actor_id", "actor_type"],
+      "properties": {
+        "actor_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "actor_type": { "enum": ["human", "orchestrator", "system"] },
+        "display_name": { "type": "string", "maxLength": 200 },
+        "authentication_method": { "type": "string", "maxLength": 100 }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["system_id", "run_id"],
+      "properties": {
+        "system_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "run_id": { "type": "string", "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$" },
+        "task_id": { "type": "string", "minLength": 1, "maxLength": 200 }
+      }
+    },
+    "preconditions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expected_run_revision", "expected_run_state"],
+      "properties": {
+        "expected_run_revision": { "type": "integer", "minimum": 0 },
+        "expected_run_state": { "$ref": "#/$defs/runState" },
+        "expected_task_state": { "$ref": "#/$defs/taskState" },
+        "required_lease_owner": { "type": "string", "maxLength": 200 }
+      }
+    },
+    "runState": {
+      "enum": [
+        "requested",
+        "preflight",
+        "ready",
+        "running",
+        "awaiting_approval",
+        "validating",
+        "paused",
+        "blocked",
+        "completed",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "taskState": {
+      "enum": [
+        "pending",
+        "ready",
+        "dispatched",
+        "running",
+        "blocked",
+        "completed",
+        "skipped",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "artifactReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_id", "revision", "path", "sha256"],
+      "properties": {
+        "artifact_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "revision": { "type": "integer", "minimum": 1 },
+        "path": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "sha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" }
+      }
+    },
+    "executionSelection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adapter"],
+      "properties": {
+        "adapter": {
+          "enum": [
+            "manual_codex",
+            "codex_cli_local",
+            "openai_responses_api",
+            "human",
+            "deterministic_local"
+          ]
+        },
+        "model": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "model_profile": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "reasoning_effort": {
+          "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+        },
+        "allow_fallback": { "type": "boolean", "default": false }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "adapter": {
+                "enum": ["manual_codex", "codex_cli_local", "openai_responses_api"]
+              }
+            }
+          },
+          "then": {
+            "anyOf": [
+              { "required": ["model"] },
+              { "required": ["model_profile"] }
+            ]
+          }
+        }
+      ]
+    },
+    "startRunPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_kind", "requirement", "run_plan", "product_base_commit"],
+      "properties": {
+        "run_kind": { "enum": ["requirement_intake", "implementation", "validation", "release"] },
+        "requirement": { "$ref": "#/$defs/artifactReference" },
+        "run_plan": { "$ref": "#/$defs/artifactReference" },
+        "product_base_commit": { "type": "string", "pattern": "^[A-Fa-f0-9]{7,64}$" },
+        "supersedes_run_id": { "type": "string", "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$" }
+      }
+    },
+    "startTaskPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["execution"],
+      "properties": {
+        "execution": { "$ref": "#/$defs/executionSelection" }
+      }
+    },
+    "reasonPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason"],
+      "properties": {
+        "reason": { "type": "string", "minLength": 1, "maxLength": 4000 }
+      }
+    },
+    "resumePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "resolution_note": { "type": "string", "maxLength": 4000 }
+      }
+    },
+    "manualResultPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outcome", "result_manifest", "actual_execution"],
+      "properties": {
+        "outcome": { "enum": ["completed", "blocked", "failed"] },
+        "result_manifest": { "$ref": "#/$defs/artifactReference" },
+        "actual_execution": { "$ref": "#/$defs/executionSelection" }
+      }
+    }
+  }
+}

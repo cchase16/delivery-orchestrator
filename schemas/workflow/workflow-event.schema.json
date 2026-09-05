@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:odoo-development-factory:schema:workflow-event:1",
+  "title": "Workflow Event",
+  "description": "Immutable accepted event used to derive run and task state.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "event_id",
+    "event_type",
+    "run_id",
+    "sequence",
+    "run_revision",
+    "occurred_at",
+    "recorded_by",
+    "details"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "event_id": {
+      "type": "string",
+      "pattern": "^EVT-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+    },
+    "event_type": {
+      "enum": [
+        "command_accepted",
+        "command_rejected",
+        "run_state_changed",
+        "task_state_changed",
+        "gate_opened",
+        "gate_satisfied",
+        "gate_rejected",
+        "approval_invalidated",
+        "validation_recorded",
+        "checkpoint_recorded"
+      ]
+    },
+    "run_id": { "type": "string", "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$" },
+    "task_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "gate_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "run_revision": { "type": "integer", "minimum": 0 },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "recorded_by": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "caused_by_command_id": {
+      "type": "string",
+      "pattern": "^CMD-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+    },
+    "caused_by_approval_id": {
+      "type": "string",
+      "pattern": "^APR-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+    },
+    "previous_run_state": { "$ref": "#/$defs/runState" },
+    "current_run_state": { "$ref": "#/$defs/runState" },
+    "previous_task_state": { "$ref": "#/$defs/taskState" },
+    "current_task_state": { "$ref": "#/$defs/taskState" },
+    "details": { "type": "object" }
+  },
+  "$defs": {
+    "runState": {
+      "enum": [
+        "requested",
+        "preflight",
+        "ready",
+        "running",
+        "awaiting_approval",
+        "validating",
+        "paused",
+        "blocked",
+        "completed",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "taskState": {
+      "enum": [
+        "pending",
+        "ready",
+        "dispatched",
+        "running",
+        "blocked",
+        "completed",
+        "skipped",
+        "failed",
+        "cancelled"
+      ]
+    }
+  }
+}

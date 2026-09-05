@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "approval_id": "APR-2026-09-0001",
+  "gate_id": "run_plan_approval",
+  "decision": "approved",
+  "issued_at": "2026-09-05T16:00:00-04:00",
+  "issued_by": {
+    "actor_id": "local-developer",
+    "actor_type": "human",
+    "display_name": "Local Developer",
+    "role": "product_owner",
+    "authentication_method": "local_dashboard_session"
+  },
+  "target": {
+    "system_id": "customer-odoo",
+    "run_id": "RUN-2026-09-0001",
+    "run_revision": 5
+  },
+  "bindings": [
+    {
+      "binding_type": "requirement",
+      "artifact_id": "REQ-0001",
+      "revision": 1,
+      "path": "requirements/Odoo_Form_Context_Menu_Customization_Design.docx",
+      "digest": {
+        "algorithm": "sha256",
+        "value": "1111111111111111111111111111111111111111111111111111111111111111"
+      }
+    },
+    {
+      "binding_type": "run_plan",
+      "artifact_id": "PLAN-REQ-0001-001",
+      "revision": 1,
+      "path": "run-plans/Odoo_Form_Context_Menu_Implementation_Run_Plan.docx",
+      "digest": {
+        "algorithm": "sha256",
+        "value": "2222222222222222222222222222222222222222222222222222222222222222"
+      }
+    }
+  ],
+  "comments": "Approved for implementation."
+}
