@@ -15,6 +15,101 @@ const temporaryDirectories: string[] = [];
 const states: RuntimeState[] = [];
 const run = promisify(execFile);
 
+function canonicalRunPlanMarkdown(
+  options: {
+    title?: string;
+    phaseId?: string;
+    phaseTitle?: string;
+    taskId?: string;
+    taskTitle?: string;
+    baseline?: string;
+    dependencies?: string[];
+    forbiddenPaths?: string[];
+  } = {},
+): string {
+  const title = options.title ?? "Context menu implementation";
+  const phaseId = options.phaseId ?? "PH-01";
+  const phaseTitle = options.phaseTitle ?? "Foundation";
+  const taskId = options.taskId ?? "TASK-01-01";
+  const taskTitle = options.taskTitle ?? "Add the menu service";
+  const nested = (values: string[], code = false) =>
+    (values.length ? values : ["None"])
+      .map(
+        (value) => `  - ${code && value !== "None" ? `\`${value}\`` : value}`,
+      )
+      .join("\n");
+  return [
+    `# ${title}`,
+    "",
+    "## Document status",
+    "",
+    "**Plan status:** `DRAFT`",
+    "",
+    "**Execution status:** `NOT STARTED`",
+    "",
+    `**Product baseline:** \`${options.baseline ?? "a".repeat(40)}\``,
+    "",
+    "## Architecture",
+    "",
+    "### Repository and delivery constraints",
+    "",
+    "- **Run-plan dependencies:**",
+    nested(options.dependencies ?? []),
+    "- **Affected modules:**",
+    nested(["web"]),
+    "- **Forbidden paths:**",
+    nested(options.forbiddenPaths ?? ["delivery/**"], true),
+    "- **Database concerns:**",
+    nested(["No migration expected."]),
+    "- **Known conflicts:**",
+    nested([]),
+    "",
+    "## Phased implementation plan",
+    "",
+    `## ${phaseId} ${phaseTitle}`,
+    "",
+    "**Status:** `NOT STARTED`",
+    "",
+    "**Depends on:** None",
+    "",
+    "**Objective:** Deliver the context-menu foundation.",
+    "",
+    "### Development tasks",
+    "",
+    `- [ ] **${taskId} ${taskTitle}**`,
+    "  - **Action:** Implement the menu service.",
+    "  - **Deliverable:** Tested service code.",
+    "  - **Allowed paths:**",
+    "    - `addons/**`",
+    "  - **Verification:**",
+    "    - Run the focused module tests.",
+    "",
+    "### Tests and verification",
+    "",
+    "- Run the focused module tests.",
+    "",
+    "### Exit criteria",
+    "",
+    "- The menu is available from the target view.",
+    "",
+    "## Acceptance criteria traceability",
+    "",
+    "| Requirement criterion | Planned implementation | Verification | Phase and tasks |",
+    "| --- | --- | --- | --- |",
+    `| Context menu | Menu service | Focused tests | ${phaseId} ${taskId} |`,
+    "",
+    "## Risks and responses",
+    "",
+    "| Risk or assumption | Impact | Response or validation task | Owner | Status |",
+    "| --- | --- | --- | --- | --- |",
+    `| Odoo API compatibility | Rework | Validate in ${taskId} | Unassigned | Open |`,
+    "",
+    "## Completion rule",
+    "",
+    "Complete only after all tasks, tests, and acceptance criteria pass.",
+  ].join("\n");
+}
+
 async function fixture(): Promise<DashboardConfig> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "factory-dashboard-"));
   temporaryDirectories.push(root);
@@ -663,55 +758,14 @@ describe("DeliveryRepository", () => {
       kind: "requirement",
       decision: "approved",
     });
-    const markdown = [
-      "# Context menu implementation",
-      "",
-      "## PH-01 Foundation",
-      "",
-      "- TASK-01 Add the menu service.",
-      "",
-      "## Verification",
-      "",
-      "Run the focused module tests.",
-      "",
-      "## Exit criteria",
-      "",
-      "The menu is available from the target view.",
-    ].join("\n");
-    const sidecar = {
-      planning: {
-        affected_modules: ["web"],
-        dependencies: [],
-        forbidden_paths: ["delivery/**"],
-        database_concerns: ["No migration expected."],
-        conflicts: [],
-        product_baseline: "a".repeat(40),
-      },
-      phases: [
-        {
-          phase_id: "PH-01",
-          title: "Foundation",
-          status: "not_started",
-          tasks: [
-            {
-              task_id: "TASK-01",
-              title: "Add the menu service",
-              status: "not_started",
-              allowed_paths: ["addons/**"],
-            },
-          ],
-        },
-      ],
-    };
+    const markdown = canonicalRunPlanMarkdown();
     const first = await repository.saveRunPlanDraft({
       requirementId: requirement.id,
       markdown,
-      sidecar,
     });
     const second = await repository.saveRunPlanDraft({
       requirementId: requirement.id,
       markdown,
-      sidecar,
     });
     expect(second.id).toBe(first.id);
     expect(
@@ -731,6 +785,32 @@ describe("DeliveryRepository", () => {
     const firstSidecar = JSON.parse(
       await fs.readFile(firstSidecarPath, "utf8"),
     );
+    expect(firstSidecar).toMatchObject({
+      planning: {
+        affected_modules: ["web"],
+        dependencies: [],
+        forbidden_paths: ["delivery/**"],
+        database_concerns: ["No migration expected."],
+        conflicts: [],
+        product_baseline: "a".repeat(40),
+      },
+      phases: [
+        {
+          phase_id: "PH-01",
+          title: "Foundation",
+          status: "not_started",
+          tasks: [
+            {
+              task_id: "TASK-01-01",
+              title: "Add the menu service",
+              status: "not_started",
+              allowed_paths: ["addons/**"],
+              validation: ["Run the focused module tests."],
+            },
+          ],
+        },
+      ],
+    });
     firstSidecar.planning.forbidden_paths = ["delivery/**", "addons/**"];
     await fs.writeFile(
       firstSidecarPath,
@@ -773,30 +853,12 @@ describe("DeliveryRepository", () => {
     );
     const dependentPlan = await repository.saveRunPlanDraft({
       requirementId: requirement.id,
-      markdown: markdown
-        .replace("# Context menu implementation", "# Context menu integration")
-        .replace("PH-01", "PH-02")
-        .replace("TASK-01", "TASK-02"),
-      sidecar: {
-        ...sidecar,
-        planning: {
-          ...sidecar.planning,
-          dependencies: [first.id],
-        },
-        phases: [
-          {
-            ...sidecar.phases[0],
-            phase_id: "PH-02",
-            tasks: [
-              {
-                ...sidecar.phases[0].tasks[0],
-                task_id: "TASK-02",
-                allowed_paths: ["addons/**"],
-              },
-            ],
-          },
-        ],
-      },
+      markdown: canonicalRunPlanMarkdown({
+        title: "Context menu integration",
+        phaseId: "PH-02",
+        taskId: "TASK-02-01",
+        dependencies: [first.id],
+      }),
     });
     await repository.recordDecision({
       artifactId: dependentPlan.id,
@@ -860,29 +922,12 @@ describe("DeliveryRepository", () => {
     ).rejects.toThrow("violates dependency order");
     const inconsistentPlan = await repository.saveRunPlanDraft({
       requirementId: requirement.id,
-      markdown: markdown
-        .replace("# Context menu implementation", "# Context menu migration")
-        .replace("PH-01", "PH-03")
-        .replace("TASK-01", "TASK-03"),
-      sidecar: {
-        ...sidecar,
-        planning: {
-          ...sidecar.planning,
-          product_baseline: "b".repeat(40),
-        },
-        phases: [
-          {
-            ...sidecar.phases[0],
-            phase_id: "PH-03",
-            tasks: [
-              {
-                ...sidecar.phases[0].tasks[0],
-                task_id: "TASK-03",
-              },
-            ],
-          },
-        ],
-      },
+      markdown: canonicalRunPlanMarkdown({
+        title: "Context menu migration",
+        phaseId: "PH-03",
+        taskId: "TASK-03-01",
+        baseline: "b".repeat(40),
+      }),
     });
     await repository.recordDecision({
       artifactId: inconsistentPlan.id,
@@ -898,34 +943,16 @@ describe("DeliveryRepository", () => {
     await expect(
       repository.saveRunPlanDraft({
         requirementId: requirement.id,
-        markdown,
-        sidecar: {
-          ...sidecar,
-          phases: [
-            {
-              ...sidecar.phases[0],
-              phase_id: "PH-02",
-            },
-          ],
-        },
+        markdown: markdown.replace("    - Run the focused module tests.", ""),
       }),
-    ).rejects.toThrow("phase identifiers must match");
+    ).rejects.toThrow("must include at least one verification step");
 
     const unboundPlan = await repository.saveRunPlanDraft({
       requirementId: requirement.id,
-      markdown: markdown
-        .replace("PH-01", "PH-06")
-        .replace("TASK-01", "TASK-06"),
-      sidecar: {
-        ...sidecar,
-        phases: [
-          {
-            ...sidecar.phases[0],
-            phase_id: "PH-06",
-            tasks: [{ ...sidecar.phases[0].tasks[0], task_id: "TASK-06" }],
-          },
-        ],
-      },
+      markdown: canonicalRunPlanMarkdown({
+        phaseId: "PH-06",
+        taskId: "TASK-06-01",
+      }),
     });
     const unboundPath = path.join(
       config.deliveryRepository,
@@ -965,37 +992,19 @@ describe("DeliveryRepository", () => {
 
     const cycleA = await repository.saveRunPlanDraft({
       requirementId: requirement.id,
-      markdown: markdown
-        .replace("PH-01", "PH-04")
-        .replace("TASK-01", "TASK-04"),
-      sidecar: {
-        ...sidecar,
-        planning: { ...sidecar.planning, dependencies: ["RP-CYCLE-B"] },
-        phases: [
-          {
-            ...sidecar.phases[0],
-            phase_id: "PH-04",
-            tasks: [{ ...sidecar.phases[0].tasks[0], task_id: "TASK-04" }],
-          },
-        ],
-      },
+      markdown: canonicalRunPlanMarkdown({
+        phaseId: "PH-04",
+        taskId: "TASK-04-01",
+        dependencies: ["RP-CYCLE-B"],
+      }),
     });
     const cycleB = await repository.saveRunPlanDraft({
       requirementId: requirement.id,
-      markdown: markdown
-        .replace("PH-01", "PH-05")
-        .replace("TASK-01", "TASK-05"),
-      sidecar: {
-        ...sidecar,
-        planning: { ...sidecar.planning, dependencies: [cycleA.id] },
-        phases: [
-          {
-            ...sidecar.phases[0],
-            phase_id: "PH-05",
-            tasks: [{ ...sidecar.phases[0].tasks[0], task_id: "TASK-05" }],
-          },
-        ],
-      },
+      markdown: canonicalRunPlanMarkdown({
+        phaseId: "PH-05",
+        taskId: "TASK-05-01",
+        dependencies: [cycleA.id],
+      }),
     });
     const cycleAPath = path.join(
       config.deliveryRepository,

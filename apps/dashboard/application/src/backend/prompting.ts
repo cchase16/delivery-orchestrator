@@ -16,9 +16,38 @@ const execFileAsync = promisify(execFile);
 
 const templateVersions = {
   work_package_sequencing: "work-package-sequencing.v1",
-  run_plan_generation: "run-plan-generation.v1",
+  run_plan_generation: "run-plan-generation.v3",
   run_plan_execution: "run-plan-execution.v1",
 } as const;
+
+const runPlanTemplateDirectory = path.join("templates", "run-plan");
+
+function requirementName(content: string, fallback: string): string {
+  const heading = content.match(/^#\s+(.+?)\s*$/m)?.[1]?.trim();
+  return heading || fallback;
+}
+
+function applyPromptValues(
+  prompt: string,
+  values: Record<string, string>,
+): string {
+  const placeholders = [
+    ...new Set(
+      (prompt.match(/{{[A-Z0-9_]+}}/g) ?? []).map((value) =>
+        value.slice(2, -2),
+      ),
+    ),
+  ];
+  const unknown = placeholders.filter((key) => !(key in values));
+  if (unknown.length)
+    throw new Error(
+      `Run-plan generation prompt has unresolved placeholders: ${unknown.join(", ")}`,
+    );
+  let rendered = prompt;
+  for (const [key, value] of Object.entries(values))
+    rendered = rendered.replaceAll(`{{${key}}}`, value);
+  return rendered.trim();
+}
 
 export const supportedPromptModels = [
   "gpt-5.6-sol",
@@ -151,9 +180,46 @@ export class PromptBuilder {
         return `### ${document?.artifact.id} (revision ${document?.artifact.revision}, sha256 ${document?.artifact.digest}, ${document?.artifact.path})\n${content.text}`;
       })
       .join("\n\n");
+    let runPlanTemplate = "";
     const instruction =
       taskType === "run_plan_generation"
-        ? "Create one complete phased Markdown implementation run plan for the approved requirement. Include stable phase/task identifiers, status fields, development tasks, verification, exit criteria, allowed and forbidden paths. Return exactly one ```markdown``` block containing the full plan followed by one ```json``` block containing its schema-validated sidecar; do not create a goal."
+        ? await (async () => {
+            const templateRoot = path.join(
+              this.config.orchestratorRepository,
+              runPlanTemplateDirectory,
+            );
+            let standardPrompt: string;
+            try {
+              [standardPrompt, runPlanTemplate] = await Promise.all([
+                fs.readFile(
+                  path.join(templateRoot, "run-plan-generation.prompt.md"),
+                  "utf8",
+                ),
+                fs.readFile(
+                  path.join(
+                    templateRoot,
+                    "implementation-run-plan.template.md",
+                  ),
+                  "utf8",
+                ),
+              ]);
+            } catch (cause) {
+              throw new Error(
+                `Run-plan generation template is unavailable under ${templateRoot}: ${cause instanceof Error ? cause.message : String(cause)}`,
+              );
+            }
+            const requirement = documents[0];
+            const artifact = requirement?.artifact;
+            return applyPromptValues(standardPrompt, {
+              REQUIREMENT_NAME: requirementName(
+                requirement?.content ?? "",
+                artifact?.title ?? artifact?.id ?? artifactIds[0],
+              ),
+              REQUIREMENT_REFERENCE: artifact
+                ? `${artifact.id} revision ${artifact.revision} at ${artifact.path}`
+                : artifactIds[0],
+            });
+          })()
         : taskType === "work_package_sequencing"
           ? "Suggest an execution sequence only for the supplied approved run plans. Explain dependencies, shared Odoo modules, path overlap, database concerns, conflicts, and risk. Return exactly one JSON object with ordered_run_plan_ids and rationale. Do not rewrite any run plan."
           : "Execute the supplied approved implementation run plan as a goal. Work through phases and tasks in order, keep progress in the separate execution overlay, respect allowed and forbidden paths, and stop with a structured blocker when required input or permission is missing.";
@@ -163,6 +229,15 @@ export class PromptBuilder {
       `Template: ${templateVersions[taskType]}`,
       "",
       instruction,
+      ...(runPlanTemplate
+        ? [
+            "",
+            "Canonical run-plan Markdown template:",
+            "<run-plan-template>",
+            runPlanTemplate.trim(),
+            "</run-plan-template>",
+          ]
+        : []),
       "",
       "System context:",
       systemContext.text,

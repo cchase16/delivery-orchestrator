@@ -189,40 +189,74 @@ describe("dashboard HTTP integration", () => {
       }),
     });
     expect(approvedRequirement.response.ok).toBe(true);
-    const markdown =
-      "# Integration run plan\n\n## PH-01 Foundation\n\n- TASK-01 Implement the menu.\n\n## Verification\n\nRun the focused tests.\n\n## Exit criteria\n\nThe menu is available.\n";
+    const markdown = `# Integration run plan
+
+## Document status
+
+**Plan status:** \`DRAFT\`
+
+**Execution status:** \`NOT STARTED\`
+
+**Product baseline:** \`${baseline}\`
+
+## Architecture
+
+- **Run-plan dependencies:** None
+- **Affected modules:** web
+- **Forbidden paths:** \`delivery/**\`
+- **Database concerns:** None
+- **Known conflicts:** None
+
+## Phased implementation plan
+
+## PH-01 Foundation
+
+**Status:** \`NOT STARTED\`
+
+**Depends on:** None
+
+**Objective:** Implement the menu.
+
+### Development tasks
+
+- [ ] **TASK-01-01 Implement the menu**
+  - **Action:** Implement the approved menu behavior.
+  - **Deliverable:** Tested menu code.
+  - **Allowed paths:**
+    - \`addons/**\`
+  - **Verification:**
+    - Run the focused tests.
+
+### Tests and verification
+
+- Run the focused tests.
+
+### Exit criteria
+
+- The menu is available.
+
+## Acceptance criteria traceability
+
+| Requirement criterion | Planned implementation | Verification | Phase and tasks |
+| --- | --- | --- | --- |
+| Menu available | Menu code | Focused tests | PH-01 TASK-01-01 |
+
+## Risks and responses
+
+| Risk or assumption | Impact | Response or validation task | Owner | Status |
+| --- | --- | --- | --- | --- |
+| Compatibility | Rework | Validate in TASK-01-01 | Unassigned | Open |
+
+## Completion rule
+
+Complete only after all checks pass.
+`;
     const runPlanDraft = await request(port, "/api/run-plans/drafts", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         requirementId: requirementArtifact.id,
         markdown,
-        sidecar: {
-          planning: {
-            dependencies: [],
-            affected_modules: ["web"],
-            forbidden_paths: ["delivery/**"],
-            database_concerns: [],
-            conflicts: [],
-            product_baseline: baseline,
-          },
-          phases: [
-            {
-              phase_id: "PH-01",
-              title: "Foundation",
-              status: "not_started",
-              tasks: [
-                {
-                  task_id: "TASK-01",
-                  title: "Implement the menu",
-                  status: "not_started",
-                  allowed_paths: ["addons/**"],
-                  validation: ["Run the focused tests."],
-                },
-              ],
-            },
-          ],
-        },
       }),
     });
     expect(runPlanDraft.response.ok).toBe(true);
@@ -410,7 +444,7 @@ describe("dashboard HTTP integration", () => {
           {
             criterionId: "AC-01",
             statement: "The context menu is available.",
-            taskIds: ["TASK-01"],
+            taskIds: ["TASK-01-01"],
             checkNames: ["Repository and schema validation"],
           },
         ],

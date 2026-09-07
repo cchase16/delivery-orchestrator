@@ -40,6 +40,13 @@ async function fixture(): Promise<{
   await fs.mkdir(path.join(delivery, "system-plans"), { recursive: true });
   await fs.mkdir(path.join(delivery, "run-plans"), { recursive: true });
   await fs.mkdir(product, { recursive: true });
+  const runPlanTemplateSource = path.resolve(
+    process.cwd(),
+    "../../../templates/run-plan",
+  );
+  await fs.cp(runPlanTemplateSource, path.join(root, "templates", "run-plan"), {
+    recursive: true,
+  });
   await fs.writeFile(
     path.join(delivery, "system.yaml"),
     "system:\n  id: test-system\nrequirements:\n  directory: requirements\n",
@@ -207,6 +214,14 @@ describe("PromptBuilder and execution adapters", () => {
     expect(packet.prompt).toContain(requirement.digest);
     expect(packet.prompt).toContain("System context marker");
     expect(packet.prompt).toContain("Product baseline");
+    expect(packet.prompt).toContain(
+      'Create an implementation plan to build "Context menu" as described in REQ-CONTEXT-MENU revision 1',
+    );
+    expect(packet.prompt).toContain("Canonical run-plan Markdown template:");
+    expect(packet.prompt).toContain("## Architecture");
+    expect(packet.prompt).toContain("## Phased implementation plan");
+    expect(packet.prompt).toContain("## Acceptance criteria traceability");
+    expect(packet.prompt).toContain("Do not create JSON or a sidecar");
     expect(packet.prompt).toContain("never approve your own work");
     expect(packet.prompt).not.toContain("sk-test-secret-value");
     expect(packet.redactionApplied).toBe(true);

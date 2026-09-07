@@ -22,6 +22,7 @@ import type {
   Snapshot,
   WorkflowEventSummary,
 } from "../shared/types.js";
+import { deriveRunPlanSidecar } from "./run-plan-markdown.js";
 import type { DashboardConfig } from "./config.js";
 import { RuntimeState } from "./state.js";
 import type { SchemaRegistry } from "./validation.js";
@@ -2863,62 +2864,9 @@ export class DeliveryRepository {
   async saveRunPlanDraft(input: {
     requirementId: string;
     markdown: string;
-    sidecar: Record<string, unknown>;
     supersedesRunPlanId?: string;
   }): Promise<ArtifactSummary> {
-    if (!input.markdown.trim())
-      throw new Error("Run-plan Markdown is required.");
-    if (!/PH-[A-Za-z0-9][A-Za-z0-9._-]*/.test(input.markdown))
-      throw new Error(
-        "Run-plan Markdown must include stable phase identifiers.",
-      );
-    if (!/TASK-[A-Za-z0-9][A-Za-z0-9._-]*/.test(input.markdown))
-      throw new Error(
-        "Run-plan Markdown must include stable task identifiers.",
-      );
-    if (!/verification/i.test(input.markdown))
-      throw new Error("Run-plan Markdown must include verification guidance.");
-    if (!/exit criteria/i.test(input.markdown))
-      throw new Error("Run-plan Markdown must include exit criteria.");
-    const markdownPhaseIds = [
-      ...new Set(
-        input.markdown.match(/\bPH-[A-Za-z0-9][A-Za-z0-9._-]*/g) ?? [],
-      ),
-    ];
-    const markdownTaskIds = [
-      ...new Set(
-        input.markdown.match(/\bTASK-[A-Za-z0-9][A-Za-z0-9._-]*/g) ?? [],
-      ),
-    ];
-    const sidecarPhases = Array.isArray(input.sidecar.phases)
-      ? (input.sidecar.phases as Array<Record<string, unknown>>)
-      : [];
-    const sidecarPhaseIds = sidecarPhases.map((phase) =>
-      String(phase.phase_id ?? ""),
-    );
-    const sidecarTaskIds = sidecarPhases.flatMap((phase) =>
-      Array.isArray(phase.tasks)
-        ? (phase.tasks as Array<Record<string, unknown>>).map((task) =>
-            String(task.task_id ?? ""),
-          )
-        : [],
-    );
-    if (
-      markdownPhaseIds.length !== sidecarPhaseIds.length ||
-      markdownPhaseIds.some((id) => !sidecarPhaseIds.includes(id)) ||
-      new Set(sidecarPhaseIds).size !== sidecarPhaseIds.length
-    )
-      throw new Error(
-        "Run-plan Markdown phase identifiers must match unique sidecar phase identifiers.",
-      );
-    if (
-      markdownTaskIds.length !== sidecarTaskIds.length ||
-      markdownTaskIds.some((id) => !sidecarTaskIds.includes(id)) ||
-      new Set(sidecarTaskIds).size !== sidecarTaskIds.length
-    )
-      throw new Error(
-        "Run-plan Markdown task identifiers must match unique sidecar task identifiers.",
-      );
+    const derivedSidecar = deriveRunPlanSidecar(input.markdown);
     const snapshot = await this.snapshot();
     const requirement = snapshot.artifacts.find(
       (artifact) =>
@@ -2974,7 +2922,7 @@ export class DeliveryRepository {
       .relative(this.config.deliveryRepository, documentPath)
       .replaceAll("\\", "/");
     const sidecar = {
-      ...input.sidecar,
+      ...derivedSidecar,
       schema_version: 1,
       run_plan_id: id,
       revision,

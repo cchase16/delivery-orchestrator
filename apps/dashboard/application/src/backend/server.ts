@@ -591,7 +591,6 @@ app.post<{
   Body: {
     requirementId: string;
     markdown: string;
-    sidecar: Record<string, unknown>;
     supersedesRunPlanId?: string;
   };
 }>("/api/run-plans/drafts", async (request, reply) => {
@@ -599,7 +598,6 @@ app.post<{
     return await repository.saveRunPlanDraft({
       requirementId: request.body?.requirementId ?? "",
       markdown: request.body?.markdown ?? "",
-      sidecar: request.body?.sidecar ?? {},
       supersedesRunPlanId: request.body?.supersedesRunPlanId,
     });
   } catch (cause) {

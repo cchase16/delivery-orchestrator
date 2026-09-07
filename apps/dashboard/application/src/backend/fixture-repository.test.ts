@@ -13,6 +13,71 @@ const run = promisify(execFile);
 const roots: string[] = [];
 const states: RuntimeState[] = [];
 
+function generatedPlan(title: string, taskTitle: string): string {
+  return `# ${title}
+
+## Document status
+
+**Plan status:** \`DRAFT\`
+
+**Execution status:** \`NOT STARTED\`
+
+**Product baseline:** \`${"a".repeat(40)}\`
+
+## Architecture
+
+- **Run-plan dependencies:** None
+- **Affected modules:** web
+- **Forbidden paths:** \`delivery/**\`
+- **Database concerns:** No migration expected.
+- **Known conflicts:** None
+
+## Phased implementation plan
+
+## PH-01 Build
+
+**Status:** \`NOT STARTED\`
+
+**Depends on:** None
+
+**Objective:** Build the approved feature.
+
+### Development tasks
+
+- [ ] **TASK-01-01 ${taskTitle}**
+  - **Action:** Implement the approved behavior.
+  - **Deliverable:** Tested product code.
+  - **Allowed paths:**
+    - \`addons/**\`
+  - **Verification:**
+    - Run tests.
+
+### Tests and verification
+
+- Run tests.
+
+### Exit criteria
+
+- The approved behavior works.
+
+## Acceptance criteria traceability
+
+| Requirement criterion | Planned implementation | Verification | Phase and tasks |
+| --- | --- | --- | --- |
+| Approved behavior | Product code | Tests | PH-01 TASK-01-01 |
+
+## Risks and responses
+
+| Risk or assumption | Impact | Response or validation task | Owner | Status |
+| --- | --- | --- | --- | --- |
+| Compatibility | Rework | Validate in TASK-01-01 | Unassigned | Open |
+
+## Completion rule
+
+Complete only after all checks pass.
+`;
+}
+
 afterEach(async () => {
   for (const state of states.splice(0)) state.close();
   await Promise.all(
@@ -93,29 +158,11 @@ describe("dashboard delivery fixture", () => {
       repository.saveRunPlanDraft({
         requirementId: "REQ-FIXTURE-APPROVED",
         markdown: "# Incomplete\n\n## PH-01\n\n- TASK-01\n",
-        sidecar: {},
       }),
-    ).rejects.toThrow("verification guidance");
+    ).rejects.toThrow("must include ## Document status");
     const saved = await repository.saveRunPlanDraft({
       requirementId: "REQ-FIXTURE-APPROVED",
-      markdown:
-        "# Generated plan\n\n## PH-01 Build\n\n- TASK-01 Implement the menu.\n\n## Verification\n\nRun tests.\n\n## Exit criteria\n\nThe menu works.\n",
-      sidecar: {
-        phases: [
-          {
-            phase_id: "PH-01",
-            title: "Build",
-            status: "not_started",
-            tasks: [
-              {
-                task_id: "TASK-01",
-                title: "Implement the menu",
-                status: "not_started",
-              },
-            ],
-          },
-        ],
-      },
+      markdown: generatedPlan("Generated plan", "Implement the menu"),
     });
     expect(saved.id).toMatch(/^RP-/);
     expect((await repository.readArtifact(saved.id))?.content).toContain(
@@ -124,24 +171,7 @@ describe("dashboard delivery fixture", () => {
     const regenerated = await repository.saveRunPlanDraft({
       requirementId: "REQ-FIXTURE-APPROVED",
       supersedesRunPlanId: saved.id,
-      markdown:
-        "# Regenerated plan\n\n## PH-01 Build\n\n- TASK-01 Implement the revised menu.\n\n## Verification\n\nRun the revised tests.\n\n## Exit criteria\n\nThe revised menu works.\n",
-      sidecar: {
-        phases: [
-          {
-            phase_id: "PH-01",
-            title: "Build",
-            status: "not_started",
-            tasks: [
-              {
-                task_id: "TASK-01",
-                title: "Implement the revised menu",
-                status: "not_started",
-              },
-            ],
-          },
-        ],
-      },
+      markdown: generatedPlan("Regenerated plan", "Implement the revised menu"),
     });
     expect(regenerated.id).toMatch(/^RP-[A-F0-9]{20}$/);
     expect(regenerated.id).not.toBe(saved.id);

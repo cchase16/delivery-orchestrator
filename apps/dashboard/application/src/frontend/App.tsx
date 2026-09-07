@@ -263,30 +263,11 @@ function extractJsonObject(output: string): Record<string, unknown> | null {
     return null;
   }
 }
-function extractRunPlanOutput(output: string): {
-  markdown: string;
-  sidecar: Record<string, unknown>;
-} | null {
-  const value = extractJsonObject(output);
-  if (value && typeof value.markdown === "string" && value.sidecar) {
-    return {
-      markdown: value.markdown,
-      sidecar: value.sidecar as Record<string, unknown>,
-    };
-  }
-  const jsonMatch = output.match(/```json\s*([\s\S]*?)```/i);
-  if (!jsonMatch) return null;
-  try {
-    const sidecar = JSON.parse(jsonMatch[1]) as Record<string, unknown>;
-    const markdown =
-      output.match(/```(?:markdown|md)\s*([\s\S]*?)```/i)?.[1] ??
-      output.slice(0, jsonMatch.index ?? 0).trim();
-    return markdown.trim() && sidecar
-      ? { markdown: markdown.trim(), sidecar }
-      : null;
-  } catch {
-    return null;
-  }
+function extractRunPlanOutput(output: string): string | null {
+  const fenced = output.match(/```(?:markdown|md)\s*([\s\S]*?)```/i)?.[1];
+  if (fenced?.trim()) return fenced.trim();
+  const plain = output.trim();
+  return plain.startsWith("# ") ? plain : null;
 }
 function StatusMark({ status }: { status: string }) {
   const icon =
@@ -1346,7 +1327,6 @@ function ArtifactPage({
   } | null>(null);
   const [promptError, setPromptError] = useState<string | null>(null);
   const [draftMarkdown, setDraftMarkdown] = useState("");
-  const [draftSidecar, setDraftSidecar] = useState("{}");
   const [draftSaved, setDraftSaved] = useState<string | null>(null);
   const [supersedesRunPlanId, setSupersedesRunPlanId] = useState("");
   useEffect(() => {
@@ -1373,8 +1353,7 @@ function ArtifactPage({
           const extracted = extractRunPlanOutput(result.output);
           if (extracted) {
             applied = true;
-            setDraftMarkdown(extracted.markdown);
-            setDraftSidecar(JSON.stringify(extracted.sidecar, null, 2));
+            setDraftMarkdown(extracted);
             setPromptError(null);
           }
         }
@@ -1389,7 +1368,7 @@ function ArtifactPage({
         ].includes(result.status?.toLowerCase() ?? "");
         if (terminal && !applied && result.output)
           setPromptError(
-            "The task completed without a parseable Markdown plan and JSON sidecar; review the output and enter the canonical draft manually.",
+            "The task completed without a parseable Markdown plan; review the output and enter the canonical draft manually.",
           );
         if (!cancelled && !applied && !terminal)
           timer = window.setTimeout(() => void poll(), 1500);
@@ -1438,7 +1417,7 @@ function ArtifactPage({
         model: result.model ?? "gpt-5.6-sol",
         promptMode: result.promptMode ?? "standard",
         reasoningEffort: result.reasoningEffort ?? "medium",
-        templateVersion: result.templateVersion ?? "run-plan-generation.v1",
+        templateVersion: result.templateVersion ?? "run-plan-generation.v3",
         redactionApplied: result.redactionApplied ?? false,
         prompt: result.prompt ?? "",
       });
@@ -1511,14 +1490,12 @@ function ArtifactPage({
       return;
     }
     try {
-      const sidecar = JSON.parse(draftSidecar) as Record<string, unknown>;
       const response = await fetch("/api/run-plans/drafts", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           requirementId: requirement.id,
           markdown: draftMarkdown,
-          sidecar,
           ...(supersedesRunPlanId ? { supersedesRunPlanId } : {}),
         }),
       });
@@ -1535,7 +1512,7 @@ function ArtifactPage({
       setPromptError(
         cause instanceof Error
           ? cause.message
-          : "Run-plan sidecar must be valid JSON.",
+          : "Unable to validate and save the run-plan Markdown.",
       );
     }
   }
@@ -1731,9 +1708,9 @@ function ArtifactPage({
                   <span className="section-kicker">CANONICAL OUTPUT</span>
                   <h3>Save the reviewed model output</h3>
                   <p>
-                    Paste the complete Markdown plan and its JSON sidecar. The
-                    dashboard validates both and writes a new draft revision
-                    only after validation succeeds.
+                    Review the complete Markdown plan. The dashboard validates
+                    its template structure, derives the JSON sidecar, and writes
+                    a new draft revision only after validation succeeds.
                   </p>
                 </div>
                 <label>
@@ -1764,17 +1741,8 @@ function ArtifactPage({
                   <textarea
                     value={draftMarkdown}
                     onChange={(event) => setDraftMarkdown(event.target.value)}
-                    placeholder="# Implementation plan\n\n## PH-01 ...\n\n- TASK-01 ...\n\n## Verification\n\n## Exit criteria\n"
+                    placeholder="Paste the complete canonical Markdown run plan here."
                     rows={10}
-                  />
-                </label>
-                <label>
-                  Run-plan sidecar JSON
-                  <textarea
-                    value={draftSidecar}
-                    onChange={(event) => setDraftSidecar(event.target.value)}
-                    rows={10}
-                    spellCheck={false}
                   />
                 </label>
                 <div className="detail-actions">

@@ -573,7 +573,7 @@ test("requirement approval submits the exact reviewed revision", async ({
   ]);
 });
 
-test("run-plan generation applies only the returned Markdown and sidecar envelope", async ({
+test("run-plan generation saves only the returned Markdown", async ({
   page,
 }) => {
   const savedDrafts: Array<Record<string, unknown>> = [];
@@ -679,7 +679,7 @@ test("run-plan generation applies only the returned Markdown and sidecar envelop
         model: "gpt-5.6-sol",
         promptMode: "standard",
         reasoningEffort: "medium",
-        templateVersion: "run-plan-generation.v1",
+        templateVersion: "run-plan-generation.v3",
         redactionApplied: false,
         prompt: "Generate the plan.",
       }),
@@ -708,51 +708,27 @@ test("run-plan generation applies only the returned Markdown and sidecar envelop
           "```markdown",
           "# Generated browser plan",
           "",
+          "## Document status",
+          "",
+          "**Plan status:** `DRAFT`",
+          "",
+          "**Execution status:** `NOT STARTED`",
+          "",
+          `**Product baseline:** \`${"a".repeat(40)}\``,
+          "",
+          "## Architecture",
+          "",
+          "## Phased implementation plan",
+          "",
           "## PH-01 Build",
           "",
-          "- TASK-01 Implement the browser requirement.",
+          "- [ ] **TASK-01-01 Implement the browser requirement**",
           "",
-          "## Verification",
+          "## Acceptance criteria traceability",
           "",
-          "Run the focused test.",
+          "## Risks and responses",
           "",
-          "## Exit criteria",
-          "",
-          "The behavior is verified.",
-          "```",
-          "```json",
-          JSON.stringify({
-            schema_version: 1,
-            run_plan_id: "RP-BROWSER-001",
-            revision: 1,
-            requirement: {
-              id: "REQ-BROWSER-001",
-              revision: 1,
-              path: "requirements/REQ-BROWSER-001.md",
-              sha256: "b".repeat(64),
-            },
-            document: {
-              id: "RP-BROWSER-001",
-              revision: 1,
-              path: "run-plans/RP-BROWSER-001.md",
-              sha256: "d".repeat(64),
-            },
-            phases: [
-              {
-                phase_id: "PH-01",
-                title: "Build",
-                status: "not_started",
-                tasks: [
-                  {
-                    task_id: "TASK-01",
-                    title: "Implement the browser requirement",
-                    status: "not_started",
-                    allowed_paths: ["addons/**"],
-                  },
-                ],
-              },
-            ],
-          }),
+          "## Completion rule",
           "```",
         ].join("\n"),
         events: [],
@@ -780,6 +756,7 @@ test("run-plan generation applies only the returned Markdown and sidecar envelop
   await expect(page.getByText("Saved RP-BROWSER-001")).toBeVisible();
   expect(savedDrafts).toHaveLength(1);
   expect(savedDrafts[0].markdown).toContain("Generated browser plan");
+  expect(savedDrafts[0]).not.toHaveProperty("sidecar");
   expect(savedDrafts[0].supersedesRunPlanId).toBe("RP-BROWSER-OLD");
 });
 
