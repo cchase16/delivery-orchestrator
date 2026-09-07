@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "requirement_id": "REQ-FIXTURE-SUPERSEDED",
+  "revision": 1,
+  "title": "Superseded fixture requirement",
+  "status": "superseded",
+  "source": "fixture",
+  "acceptance_criteria": ["This historical revision remains inspectable."]
+}

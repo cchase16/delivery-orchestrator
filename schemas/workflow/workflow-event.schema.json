@@ -36,7 +36,10 @@
         "checkpoint_recorded"
       ]
     },
-    "run_id": { "type": "string", "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$" },
+    "run_id": {
+      "type": "string",
+      "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+    },
     "task_id": { "type": "string", "minLength": 1, "maxLength": 200 },
     "gate_id": { "type": "string", "minLength": 1, "maxLength": 200 },
     "sequence": { "type": "integer", "minimum": 1 },

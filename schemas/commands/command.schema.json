@@ -56,23 +56,41 @@
   "allOf": [
     {
       "if": { "properties": { "command_type": { "const": "start_run" } } },
-      "then": { "properties": { "payload": { "$ref": "#/$defs/startRunPayload" } } }
+      "then": {
+        "properties": { "payload": { "$ref": "#/$defs/startRunPayload" } }
+      }
     },
     {
       "if": { "properties": { "command_type": { "const": "start_task" } } },
-      "then": { "properties": { "payload": { "$ref": "#/$defs/startTaskPayload" } } }
+      "then": {
+        "properties": { "payload": { "$ref": "#/$defs/startTaskPayload" } }
+      }
     },
     {
-      "if": { "properties": { "command_type": { "enum": ["pause_run", "cancel_run", "retry_task", "request_replan"] } } },
-      "then": { "properties": { "payload": { "$ref": "#/$defs/reasonPayload" } } }
+      "if": {
+        "properties": {
+          "command_type": {
+            "enum": ["pause_run", "cancel_run", "retry_task", "request_replan"]
+          }
+        }
+      },
+      "then": {
+        "properties": { "payload": { "$ref": "#/$defs/reasonPayload" } }
+      }
     },
     {
       "if": { "properties": { "command_type": { "const": "resume_run" } } },
-      "then": { "properties": { "payload": { "$ref": "#/$defs/resumePayload" } } }
+      "then": {
+        "properties": { "payload": { "$ref": "#/$defs/resumePayload" } }
+      }
     },
     {
-      "if": { "properties": { "command_type": { "const": "submit_manual_result" } } },
-      "then": { "properties": { "payload": { "$ref": "#/$defs/manualResultPayload" } } }
+      "if": {
+        "properties": { "command_type": { "const": "submit_manual_result" } }
+      },
+      "then": {
+        "properties": { "payload": { "$ref": "#/$defs/manualResultPayload" } }
+      }
     }
   ],
   "$defs": {
@@ -93,7 +111,10 @@
       "required": ["system_id", "run_id"],
       "properties": {
         "system_id": { "type": "string", "minLength": 1, "maxLength": 200 },
-        "run_id": { "type": "string", "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$" },
+        "run_id": {
+          "type": "string",
+          "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+        },
         "task_id": { "type": "string", "minLength": 1, "maxLength": 200 }
       }
     },
@@ -164,7 +185,16 @@
         "model": { "type": "string", "minLength": 1, "maxLength": 200 },
         "model_profile": { "type": "string", "minLength": 1, "maxLength": 200 },
         "reasoning_effort": {
-          "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+          "enum": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ]
         },
         "allow_fallback": { "type": "boolean", "default": false }
       },
@@ -173,7 +203,11 @@
           "if": {
             "properties": {
               "adapter": {
-                "enum": ["manual_codex", "codex_cli_local", "openai_responses_api"]
+                "enum": [
+                  "manual_codex",
+                  "codex_cli_local",
+                  "openai_responses_api"
+                ]
               }
             }
           },
@@ -206,9 +240,15 @@
           "minItems": 1,
           "items": { "$ref": "#/$defs/artifactReference" }
         },
-        "product_base_commit": { "type": "string", "pattern": "^[A-Fa-f0-9]{7,64}$" },
+        "product_base_commit": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{7,64}$"
+        },
         "database_baseline": { "$ref": "#/$defs/artifactReference" },
-        "supersedes_run_id": { "type": "string", "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$" }
+        "supersedes_run_id": {
+          "type": "string",
+          "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+        }
       }
     },
     "startTaskPayload": {

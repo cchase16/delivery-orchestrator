@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "run_id": "RUN-EXAMPLE",
+  "work_package_id": "WP-EXAMPLE",
+  "run_plan_id": "RP-EXAMPLE",
+  "run_plan_revision": 1,
+  "status": "in_progress",
+  "current_phase_id": "PH-01",
+  "current_task_id": "TASK-01",
+  "tasks": [{ "task_id": "TASK-01", "status": "in_progress" }],
+  "updated_at": "2026-09-06T00:00:00Z"
+}

@@ -1,3 +1,3 @@
 # Dependency Analyzer
 
-Builds the requirement and work-package dependency graph, detects cycles and missing prerequisites, and distinguishes hard dependencies from sequencing preferences and informational relationships.
+Builds requirement, run-plan, and work-package dependency graphs; detects cycles and missing prerequisites; and distinguishes hard dependencies from sequencing preferences and informational relationships.

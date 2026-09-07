@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "work_package_id": "WP-EXAMPLE",
+  "revision": 1,
+  "status": "draft",
+  "sequence_rationale": "The package contains one independent plan.",
+  "members": [
+    {
+      "run_plan_id": "RP-EXAMPLE",
+      "revision": 1,
+      "path": "run-plans/RP-EXAMPLE.md",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sequence": 1
+    }
+  ]
+}

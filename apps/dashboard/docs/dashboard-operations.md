@@ -1,0 +1,118 @@
+# Dashboard Operations
+
+This document covers local installation and recovery for the Factory Dashboard.
+The dashboard is a localhost application; it does not require an OpenAI API key
+when the signed-in local Codex installation is used.
+
+## Requirements
+
+- Windows PowerShell.
+- Node.js 22 or newer.
+- Git available on `PATH`.
+- A configured customer delivery repository and product repository.
+- Codex CLI installed and authenticated if live App Server tasks are used.
+
+## Install and run
+
+From `delivery-orchestrator/apps/dashboard/application`:
+
+```powershell
+npm ci
+npm run verify
+npm run dev
+```
+
+Open `http://127.0.0.1:5173/`. Use `?demo=1` for a non-mutating seeded UI
+review. The backend defaults to port `4100` and reads these optional variables:
+
+```powershell
+$env:DELIVERY_REPOSITORY = 'C:\path\to\customer-odoo-delivery'
+$env:PRODUCT_REPOSITORY = 'C:\path\to\customer-odoo'
+$env:DASHBOARD_RUNTIME = 'C:\path\to\customer-odoo-delivery\.factory-local'
+$env:PORT = '4100'
+$env:LOG_LEVEL = 'info'
+```
+
+For a production bundle:
+
+```powershell
+npm ci
+npm run build
+npm run start
+```
+
+## Normal operation
+
+1. Review the Overview blockers and repository health.
+2. Refresh/reconcile before acting on a stale screen.
+3. Approve exact requirement, run-plan, and work-package revisions.
+4. Review the effective model, reasoning, adapter, and prompt mode before each
+   prompt task.
+5. Start implementation only after preflight is clear.
+6. Review the complete diff and evidence before recording acceptance
+   traceability and a result disposition.
+
+The dashboard writes durable workflow records through its backend. Runtime
+leases, task reconnect data, logs, and the SQLite state database live under
+`.factory-local/` and are intentionally reconstructible and ignored by Git.
+
+## Upgrade
+
+Stop the running dashboard, preserve the delivery repository, then install from
+the checked-in lockfile and rerun verification:
+
+```powershell
+npm ci
+npm run verify
+npm run test:e2e
+npm run build
+```
+
+Do not hand-edit `package-lock.json`. Review schema and plan migrations before
+using a newer application against an existing delivery repository.
+
+## Backup and recovery
+
+The durable source of truth is the delivery repository. Back up that repository
+and the product repository using the organization's normal Git/backup process.
+The `.factory-local/` directory contains reconnectable runtime state but is not
+the authoritative workflow record. If it is lost:
+
+1. Stop any old dashboard process.
+2. Start the dashboard again with the same repository paths.
+3. Use Refresh/reconcile.
+4. Review any active-run blocker and reconnect or retry only after inspection.
+
+If the SQLite file is corrupt, stop the app, move only
+`<delivery>/.factory-local/dashboard.sqlite` aside, and restart. Durable
+approvals, plans, commands, events, evidence, and dispositions remain in the
+delivery repository.
+
+## Troubleshooting
+
+- **Delivery repository is not accessible:** set `DELIVERY_REPOSITORY` to an
+  existing absolute directory.
+- **`delivery.lock` is unresolved:** browsing remains available, but governed
+  execution is intentionally blocked until the resolver supplies exact inputs.
+- **System plan is missing or invalid:** add a schema-valid artifact under the
+  configured `system-plans/` directory; do not bypass preflight.
+- **Codex App Server unavailable:** verify `codex app-server --help` works in
+  the same PowerShell session, or select the fake adapter for fixture tests.
+- **A plan or package is stale:** refresh and create a new revision; immutable
+  approvals are never overwritten.
+- **An artifact is rejected:** inspect the reason and create a reviewed
+  replacement revision rather than editing the rejected file in place.
+- **A run is blocked:** read the structured blocker, diff, evidence, and task
+  state before choosing resume, retry, replan, or cancel.
+- **Evidence is partial:** inspect the skipped quality gates. Odoo clean-install,
+  snapshot-upgrade, and targeted-validation gates remain partial until their
+  approved deterministic runners are configured in the product `factory.yaml`;
+  do not treat skipped gates as a successful pilot.
+
+## Uninstall
+
+Stop the dashboard and remove the application checkout using the repository's
+normal Git workflow. The dashboard does not install a machine-wide service.
+Keep the delivery repository and its durable records. Remove `.factory-local/`
+only when intentionally discarding local runtime state; it can be reconstructed
+on the next start.

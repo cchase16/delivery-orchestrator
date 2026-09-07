@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:odoo-development-factory:schema:model-profile:1",
+  "title": "Prompt Task Model Profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "task_type",
+    "model",
+    "reasoning_effort",
+    "prompt_mode",
+    "adapter"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "task_type": {
+      "enum": [
+        "work_package_sequencing",
+        "run_plan_generation",
+        "run_plan_execution"
+      ]
+    },
+    "model": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "reasoning_effort": {
+      "enum": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra"
+      ]
+    },
+    "prompt_mode": { "enum": ["standard", "goal"] },
+    "adapter": { "enum": ["codex_app_server", "fake", "manual_codex"] },
+    "allow_fallback": { "type": "boolean", "default": false }
+  }
+}

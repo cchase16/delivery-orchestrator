@@ -1,6 +1,6 @@
 # Delivery Orchestrator
 
-Cross-factory control plane for accepting requirements from multiple sources, planning a system, grouping requirements into work packages, dispatching development and validation work, enforcing approval gates, and presenting the local dashboard.
+Cross-factory control plane for accepting requirements from multiple sources, planning a system, creating phased implementation run plans, grouping approved run plans into sequenced work packages, dispatching development and validation work, enforcing approval gates, and presenting the local dashboard.
 
 The orchestrator coordinates work but does not contain customer-specific delivery state or deployable product code.
 

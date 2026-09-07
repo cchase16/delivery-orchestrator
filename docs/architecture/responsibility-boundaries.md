@@ -4,9 +4,9 @@
 
 Requirements factories, analysts, developers, and backlog tools submit requirement candidates with provenance. They do not schedule implementation or declare requirements accepted.
 
-## Portfolio planning agents
+## Run-plan and portfolio planning agents
 
-Agentic planning roles analyze approved requirements, architecture, dependencies, conflicts, and release objectives. They propose system plans and work packages but cannot approve their own output.
+The run-plan generator turns one approved requirement and relevant system context into a phased implementation plan. A human selects approved run plans for a work package; the sequencing role analyzes dependencies, conflicts, and release objectives to propose their order. Neither agentic role can approve its own output.
 
 ## Execution orchestrator
 

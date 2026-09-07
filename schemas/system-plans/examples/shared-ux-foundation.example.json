@@ -1,0 +1,170 @@
+{
+  "schema_version": 1,
+  "system_plan_id": "SPL-ODOO-SHARED-UX-FOUNDATION",
+  "revision": 1,
+  "title": "Reusable Odoo Navigation and Productivity Customizations",
+  "status": "proposed",
+  "objective": "Provide installable, tested Odoo customizations that improve navigation and productivity across all customer deployments.",
+  "target": {
+    "repositories": [
+      {
+        "repository_id": "customer-odoo",
+        "role": "product",
+        "path": "../customer-odoo"
+      },
+      {
+        "repository_id": "customer-odoo-delivery",
+        "role": "delivery",
+        "path": "."
+      }
+    ],
+    "target_releases": ["shared-ux-v1"]
+  },
+  "approved_requirements": [],
+  "scope": {
+    "known_capabilities": [
+      {
+        "capability_id": "CAP-ODOO-CONTEXT-MENU",
+        "title": "Right-click context menu",
+        "description": "Provide a reusable right-click context menu framework and supported actions across appropriate Odoo views.",
+        "requirement_ids": []
+      },
+      {
+        "capability_id": "CAP-ODOO-MAIN-TABLE-NAVIGATION",
+        "title": "Go to main table",
+        "description": "Provide consistent navigation from related or secondary views back to the authoritative main table.",
+        "requirement_ids": []
+      }
+    ],
+    "candidate_capabilities": [
+      {
+        "capability_id": "CAP-ODOO-NAVIGATION-SHORTCUTS",
+        "title": "Additional reusable navigation shortcuts",
+        "description": "Identify and prioritize other navigation shortcuts that are useful across customer installations.",
+        "requirement_ids": []
+      },
+      {
+        "capability_id": "CAP-ODOO-LIST-FORM-PRODUCTIVITY",
+        "title": "List and form view productivity enhancements",
+        "description": "Evaluate consistent cross-module interaction improvements for list and form views.",
+        "requirement_ids": []
+      },
+      {
+        "capability_id": "CAP-ODOO-INTERACTION-PATTERNS",
+        "title": "Shared cross-module interaction patterns",
+        "description": "Define reusable interaction conventions so future shared customizations behave consistently.",
+        "requirement_ids": []
+      }
+    ],
+    "out_of_scope": [
+      "Customer-specific business logic or one-off workflows",
+      "Changes to Odoo core source code",
+      "Features that cannot be supported across the declared Odoo compatibility target"
+    ]
+  },
+  "architecture": [
+    "Implement shared behavior as installable Odoo addon modules under customer-odoo/addons/.",
+    "Use reusable JavaScript and server-side extension contracts rather than customer-specific integrations.",
+    "Keep the product repository buildable, testable, and deployable without the development factory.",
+    "Require backward-compatible installation and upgrade behavior for every shared release."
+  ],
+  "proposed_work_packages": [
+    {
+      "work_package_id": "WP-ODOO-SHARED-UX-DISCOVERY",
+      "title": "Discover and define the shared interaction model",
+      "description": "Confirm the supported Odoo views, interaction contracts, compatibility target, acceptance criteria, and prioritized backlog of reusable capabilities.",
+      "sequence": 1,
+      "depends_on": [],
+      "requirement_ids": [],
+      "run_plan_refs": [],
+      "notes": "Produces or refines the approved requirement revisions needed by implementation packages."
+    },
+    {
+      "work_package_id": "WP-ODOO-CONTEXT-MENU",
+      "title": "Implement context-menu foundation",
+      "description": "Implement the right-click context menu capability with unit, browser, and upgrade coverage.",
+      "sequence": 2,
+      "depends_on": ["WP-ODOO-SHARED-UX-DISCOVERY"],
+      "requirement_ids": [],
+      "run_plan_refs": []
+    },
+    {
+      "work_package_id": "WP-ODOO-MAIN-TABLE",
+      "title": "Implement go-to-main-table functionality",
+      "description": "Implement authoritative-table navigation with unit, browser, and upgrade coverage.",
+      "sequence": 3,
+      "depends_on": ["WP-ODOO-SHARED-UX-DISCOVERY"],
+      "requirement_ids": [],
+      "run_plan_refs": []
+    },
+    {
+      "work_package_id": "WP-ODOO-SHARED-UX-HARDENING",
+      "title": "Harden and prepare the shared release",
+      "description": "Run cross-module compatibility checks, clean-install and production-snapshot upgrade rehearsals, and consolidate release evidence.",
+      "sequence": 4,
+      "depends_on": ["WP-ODOO-CONTEXT-MENU", "WP-ODOO-MAIN-TABLE"],
+      "requirement_ids": [],
+      "run_plan_refs": []
+    }
+  ],
+  "dependencies": [
+    {
+      "dependency_id": "ODOO-VERSION",
+      "description": "Confirm the Odoo version supported by the product and shared customizations.",
+      "status": "unresolved",
+      "owner": "product owner"
+    },
+    {
+      "dependency_id": "BROWSER-MATRIX",
+      "description": "Confirm the supported browser matrix for browser-level acceptance tests.",
+      "status": "unresolved",
+      "owner": "product owner"
+    },
+    {
+      "dependency_id": "PRODUCT-ARCHITECTURE",
+      "description": "Review existing product architecture and module boundaries before implementation.",
+      "status": "unresolved",
+      "owner": "Odoo development factory"
+    }
+  ],
+  "risks": [
+    {
+      "risk_id": "ODOO-WEB-COMPATIBILITY",
+      "description": "Odoo web-client internals may change across supported versions.",
+      "impact": "high",
+      "mitigation": "Confirm the version target early, isolate web-client extensions, and require browser and upgrade tests."
+    },
+    {
+      "risk_id": "CUSTOM-ADDON-CONFLICTS",
+      "description": "Customer-installed addons may override or conflict with shared UI behavior.",
+      "impact": "high",
+      "mitigation": "Define extension points, document compatibility expectations, and test representative addon combinations."
+    },
+    {
+      "risk_id": "SCOPE-GROWTH",
+      "description": "The set of desired shared productivity customizations is not yet complete.",
+      "impact": "medium",
+      "mitigation": "Keep unknown capabilities in the candidate backlog and add them through new requirement revisions."
+    }
+  ],
+  "assumptions": [
+    "The customizations are intended for the reusable customer-odoo product repository and may be deployed to multiple customer installations.",
+    "Each capability will receive explicit acceptance criteria before implementation.",
+    "Approved requirements, work packages, run plans, approvals, and release evidence remain in customer-odoo-delivery."
+  ],
+  "release_strategy": {
+    "approach": "Deliver the first two known capabilities as a shared foundation release, then add newly discovered capabilities through later requirement revisions and plan revisions.",
+    "increments": [
+      {
+        "release_id": "shared-ux-v1",
+        "description": "Initial reusable navigation foundation containing the context-menu and go-to-main-table capabilities.",
+        "work_package_ids": [
+          "WP-ODOO-SHARED-UX-DISCOVERY",
+          "WP-ODOO-CONTEXT-MENU",
+          "WP-ODOO-MAIN-TABLE",
+          "WP-ODOO-SHARED-UX-HARDENING"
+        ]
+      }
+    ]
+  }
+}

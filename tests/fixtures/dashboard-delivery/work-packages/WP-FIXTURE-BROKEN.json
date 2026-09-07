@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "work_package_id": "WP-FIXTURE-BROKEN",
+  "revision": 1,
+  "status": "draft",
+  "members": [
+    {
+      "run_plan_id": "RP-FIXTURE-MISSING",
+      "revision": 1,
+      "path": "run-plans/RP-FIXTURE-MISSING.md",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "sequence": 1
+    }
+  ]
+}

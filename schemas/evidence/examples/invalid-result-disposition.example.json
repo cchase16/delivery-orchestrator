@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "disposition_id": "DSP-invalid",
+  "run_id": "RUN-invalid",
+  "decision": "accepted",
+  "issued_at": "not-a-date",
+  "issued_by": {
+    "actor_id": "agent",
+    "actor_type": "orchestrator",
+    "display_name": "Agent"
+  },
+  "evidence_ids": [],
+  "reason": ""
+}

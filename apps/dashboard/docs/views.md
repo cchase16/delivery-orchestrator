@@ -12,13 +12,13 @@ Incoming requirement documents, sidecar status, review findings, dependency read
 
 Source analysis, field-map coverage, gaps, questionnaires, unresolved decisions, protected evidence references, and requirement-submission readiness.
 
-## System Plan and Work Packages
+## System Plan and Run Plans
 
-Requirement dependency graph, system-plan revision, proposed grouping, conflict groups, sequencing, concurrency, target releases, and work-package approval.
+System-plan context, approved requirements awaiting plans, and full phased implementation run plans with development tasks, stable identifiers, approval state, and execution-progress overlays.
 
-## Run Plan
+## Work Packages
 
-Phases, tasks, dependencies, requested and actual models, validation gates, approval points, and completion evidence.
+One or more exact approved run-plan revisions, their implementation sequence, grouping rationale, dependencies, current execution position, and work-package approval.
 
 ## Approval Inbox
 

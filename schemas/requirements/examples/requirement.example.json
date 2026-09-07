@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "requirement_id": "REQ-EXAMPLE",
+  "revision": 1,
+  "title": "Context menu customization",
+  "status": "awaiting_review",
+  "source": "requirements-factory",
+  "acceptance_criteria": ["A supported list view exposes the context menu."],
+  "affected_modules": ["web"],
+  "allowed_paths": ["custom_addons/context_menu/**"],
+  "forbidden_paths": ["delivery/**", "orchestrator/**"]
+}

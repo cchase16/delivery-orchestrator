@@ -1,0 +1,23 @@
+schema_version: 1
+
+system:
+  id: fixture-system
+  name: Dashboard fixture system
+
+requirements:
+  directory: requirements
+
+delivery:
+  system_plan_directory: system-plans
+  work_package_directory: work-packages
+  run_plan_directory: run-plans
+  approval_directory: control/approvals
+  command_directory: control/commands
+  run_directory: runs
+  evidence_directory: evidence
+  release_directory: releases
+
+repositories:
+  product:
+    id: fixture-product
+    local_path: ../product

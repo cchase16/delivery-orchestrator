@@ -1,0 +1,7 @@
+{
+  "ordered_run_plan_ids": [
+    "RP-CONTEXT-MENU",
+    "RP-MAIN-TABLE"
+  ],
+  "rationale": "The shared context-menu service is established before the dependent navigation behavior."
+}

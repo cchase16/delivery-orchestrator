@@ -18,7 +18,10 @@
   "properties": {
     "schema_version": { "const": 1 },
     "system_id": { "type": "string", "minLength": 1, "maxLength": 200 },
-    "run_id": { "type": "string", "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$" },
+    "run_id": {
+      "type": "string",
+      "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+    },
     "run_kind": {
       "enum": [
         "requirements_discovery",
@@ -36,7 +39,10 @@
     "open_gate_id": { "type": "string", "minLength": 1, "maxLength": 200 },
     "wait_reason": { "type": "string", "maxLength": 4000 },
     "blocked_reason": { "type": "string", "maxLength": 4000 },
-    "last_event_id": { "type": "string", "pattern": "^EVT-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$" },
+    "last_event_id": {
+      "type": "string",
+      "pattern": "^EVT-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+    },
     "updated_at": { "type": "string", "format": "date-time" },
     "tasks": {
       "type": "array",

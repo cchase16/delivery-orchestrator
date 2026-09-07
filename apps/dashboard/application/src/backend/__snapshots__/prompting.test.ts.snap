@@ -1,0 +1,21 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`PromptBuilder and execution adapters > snapshots the prompt packet contract without storing prompt content 1`] = `
+{
+  "inputArtifacts": [
+    {
+      "digest": "8a12dcd062356b4a9b9a0bdf3cfc1daa515eec98f6080b5d8e285e6f26817706",
+      "id": "REQ-CONTEXT-MENU",
+      "path": "requirements/REQ-CONTEXT-MENU.md",
+      "revision": 1,
+    },
+  ],
+  "model": "gpt-5.6-sol",
+  "prompt": "[prompt body intentionally omitted]",
+  "promptMode": "standard",
+  "reasoningEffort": "medium",
+  "redactionApplied": true,
+  "taskType": "run_plan_generation",
+  "templateVersion": "run-plan-generation.v1",
+}
+`;

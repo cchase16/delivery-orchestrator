@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "approval_id": "APR-FIXTURE-APPROVED",
+  "gate_id": "requirement_acceptance",
+  "decision": "approved",
+  "issued_at": "2026-09-06T00:00:00Z",
+  "issued_by": {
+    "actor_id": "fixture-operator",
+    "actor_type": "human",
+    "role": "operator",
+    "authentication_method": "fixture"
+  },
+  "target": {
+    "system_id": "fixture-system",
+    "run_id": "RUN-FIXTURE",
+    "run_revision": 1
+  },
+  "bindings": [
+    {
+      "binding_type": "requirement",
+      "artifact_id": "REQ-FIXTURE-APPROVED",
+      "revision": 1,
+      "path": "requirements/REQ-FIXTURE-APPROVED.md",
+      "digest": {
+        "algorithm": "sha256",
+        "value": "D558F225A87DF4D023C6CF105004E6B10CE4381FE1662DF58779A3A538DA4FAE"
+      }
+    }
+  ]
+}

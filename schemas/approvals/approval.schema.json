@@ -53,7 +53,11 @@
         "actor_type": { "const": "human" },
         "display_name": { "type": "string", "maxLength": 200 },
         "role": { "type": "string", "minLength": 1, "maxLength": 200 },
-        "authentication_method": { "type": "string", "minLength": 1, "maxLength": 100 }
+        "authentication_method": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        }
       }
     },
     "target": {
@@ -62,7 +66,10 @@
       "required": ["system_id", "run_id", "run_revision"],
       "properties": {
         "system_id": { "type": "string", "minLength": 1, "maxLength": 200 },
-        "run_id": { "type": "string", "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$" },
+        "run_id": {
+          "type": "string",
+          "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+        },
         "run_revision": { "type": "integer", "minimum": 0 },
         "task_id": { "type": "string", "minLength": 1, "maxLength": 200 }
       }
@@ -78,6 +85,8 @@
             "requirement_sidecar",
             "run_plan",
             "run_plan_sidecar",
+            "system_plan",
+            "work_package",
             "product_commit",
             "evidence_manifest",
             "database_rehearsal",

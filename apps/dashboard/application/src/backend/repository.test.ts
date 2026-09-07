@@ -1,0 +1,1098 @@
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { classifyValidationOutcome, DeliveryRepository } from "./repository.js";
+import { RuntimeState } from "./state.js";
+import type { DashboardConfig } from "./config.js";
+import { reviewProductDiff } from "./diff.js";
+import { SchemaRegistry } from "./validation.js";
+
+const temporaryDirectories: string[] = [];
+const states: RuntimeState[] = [];
+const run = promisify(execFile);
+
+async function fixture(): Promise<DashboardConfig> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "factory-dashboard-"));
+  temporaryDirectories.push(root);
+  const delivery = path.join(root, "delivery");
+  const product = path.join(root, "product");
+  await fs.mkdir(path.join(delivery, "requirements"), { recursive: true });
+  await fs.mkdir(path.join(delivery, "run-plans"), { recursive: true });
+  await fs.mkdir(product, { recursive: true });
+  await fs.writeFile(
+    path.join(delivery, "system.yaml"),
+    "system:\n  id: test-system\n  name: Test system\n",
+  );
+  await fs.writeFile(
+    path.join(delivery, "delivery.lock"),
+    "status: resolved\n",
+  );
+  await fs.writeFile(
+    path.join(delivery, "requirements", "context-menu.md"),
+    "# Context menu\n\nOpen the menu with the right mouse button.\n",
+  );
+  await fs.writeFile(
+    path.join(delivery, "run-plans", "implementation-plan.md"),
+    "# Implementation plan\n\n- Add the context menu.\n",
+  );
+  const requirementContent = await fs.readFile(
+    path.join(delivery, "requirements", "context-menu.md"),
+  );
+  const planContent = await fs.readFile(
+    path.join(delivery, "run-plans", "implementation-plan.md"),
+  );
+  const sha256 = (content: Buffer) =>
+    crypto.createHash("sha256").update(content).digest("hex");
+  await fs.writeFile(
+    path.join(delivery, "run-plans", "implementation-plan.sidecar.json"),
+    JSON.stringify(
+      {
+        schema_version: 1,
+        run_plan_id: "RP-IMPLEMENTATION-PLAN",
+        revision: 1,
+        requirement: {
+          id: "REQ-CONTEXT-MENU",
+          revision: 1,
+          path: "requirements/context-menu.md",
+          sha256: sha256(requirementContent),
+        },
+        document: {
+          id: "RP-IMPLEMENTATION-PLAN",
+          revision: 1,
+          path: "run-plans/implementation-plan.md",
+          sha256: sha256(planContent),
+        },
+        phases: [
+          {
+            phase_id: "PH-01",
+            title: "Implementation",
+            status: "not_started",
+            tasks: [
+              {
+                task_id: "TASK-01",
+                title: "Add the context menu",
+                status: "not_started",
+                allowed_paths: ["addons/**"],
+              },
+            ],
+          },
+        ],
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+  return {
+    deliveryRepository: delivery,
+    productRepository: product,
+    orchestratorRepository: root,
+    schemaDirectory: root,
+    runtimeDirectory: path.join(delivery, ".factory-local"),
+    port: 4100,
+  };
+}
+
+afterEach(async () => {
+  for (const state of states.splice(0)) state.close();
+  await Promise.all(
+    temporaryDirectories
+      .splice(0)
+      .map((directory) => fs.rm(directory, { recursive: true, force: true })),
+  );
+});
+
+describe("DeliveryRepository", () => {
+  it("classifies validation outcomes without collapsing failures into blockers", () => {
+    expect(
+      classifyValidationOutcome({
+        diffAllowed: true,
+        validationPassed: true,
+        qualityStatuses: ["passed"],
+      }),
+    ).toBe("passed");
+    expect(
+      classifyValidationOutcome({
+        diffAllowed: false,
+        validationPassed: true,
+        qualityStatuses: ["passed"],
+      }),
+    ).toBe("blocked");
+    expect(
+      classifyValidationOutcome({
+        diffAllowed: true,
+        validationPassed: true,
+        qualityStatuses: ["failed"],
+      }),
+    ).toBe("failed");
+    expect(
+      classifyValidationOutcome({
+        diffAllowed: true,
+        validationPassed: true,
+        qualityStatuses: ["timed_out"],
+      }),
+    ).toBe("failed");
+    expect(
+      classifyValidationOutcome({
+        diffAllowed: true,
+        validationPassed: true,
+        qualityStatuses: ["skipped"],
+      }),
+    ).toBe("partial");
+  });
+
+  it("reconstructs an artifact and binds a decision to its real digest", async () => {
+    const config = await fixture();
+    const state = new RuntimeState(config.runtimeDirectory);
+    states.push(state);
+    config.schemaDirectory = path.resolve(process.cwd(), "../../../schemas");
+    const registry = new SchemaRegistry(config);
+    await registry.load();
+    const repository = new DeliveryRepository(config, state, registry);
+    const snapshot = await repository.snapshot();
+    expect(snapshot.artifacts).toHaveLength(2);
+    expect(snapshot.approvals).toHaveLength(2);
+    expect(
+      snapshot.approvals.every((approval) => approval.status === "pending"),
+    ).toBe(true);
+    const artifact = snapshot.artifacts.find(
+      (candidate) => candidate.kind === "requirement",
+    )!;
+    expect(artifact.digest).toMatch(/^[a-f0-9]{64}$/);
+    const document = await repository.readArtifact(artifact.id);
+    expect(document?.content).toContain("Context menu");
+    const firstAction = await repository.recordDecision({
+      artifactId: artifact.id,
+      kind: "requirement",
+      decision: "approved",
+    });
+    const secondAction = await repository.recordDecision({
+      artifactId: artifact.id,
+      kind: "requirement",
+      decision: "approved",
+    });
+    expect(secondAction).toBe(firstAction);
+    await expect(
+      repository.recordDecision({
+        artifactId: artifact.id,
+        kind: "requirement",
+        decision: "rejected",
+        reason: "A second decision cannot replace an immutable approval.",
+      }),
+    ).rejects.toThrow("immutable decision");
+    await expect(
+      repository.recordDecision({
+        artifactId: artifact.id,
+        kind: "requirement",
+        decision: "rejected",
+      }),
+    ).rejects.toThrow("rejection reason");
+    expect(
+      await fs.readdir(
+        path.join(config.deliveryRepository, "control", "approvals"),
+      ),
+    ).toHaveLength(1);
+    expect(
+      await fs.readdir(
+        path.join(config.deliveryRepository, "control", "events"),
+      ),
+    ).toHaveLength(1);
+    expect((await repository.snapshot()).events).toHaveLength(1);
+    const eventFile = (
+      await fs.readdir(
+        path.join(config.deliveryRepository, "control", "events"),
+      )
+    )[0];
+    const event = JSON.parse(
+      await fs.readFile(
+        path.join(config.deliveryRepository, "control", "events", eventFile),
+        "utf8",
+      ),
+    ) as { event_type: string; caused_by_approval_id: string };
+    expect(event.event_type).toBe("gate_satisfied");
+    expect(event.caused_by_approval_id).toMatch(/^APR-/);
+    const approval = JSON.parse(
+      await fs.readFile(
+        path.join(
+          config.deliveryRepository,
+          "control",
+          "approvals",
+          (
+            await fs.readdir(
+              path.join(config.deliveryRepository, "control", "approvals"),
+            )
+          )[0],
+        ),
+        "utf8",
+      ),
+    ) as {
+      issued_by: { actor_type: string };
+      bindings: Array<{ path: string; digest: { value: string } }>;
+    };
+    expect(approval.issued_by.actor_type).toBe("human");
+    expect(approval.bindings[0].path).toBe(artifact.path);
+    expect(approval.bindings[0].digest.value).toBe(artifact.digest);
+    let runPlan = snapshot.artifacts.find(
+      (candidate) => candidate.kind === "run_plan",
+    )!;
+    await expect(
+      repository.saveWorkPackageDraft([], "empty package"),
+    ).rejects.toThrow("at least one approved run plan");
+    await fs.appendFile(
+      path.join(config.deliveryRepository, runPlan.path),
+      "\n",
+    );
+    await expect(
+      repository.recordDecision({
+        artifactId: runPlan.id,
+        kind: "run_plan",
+        decision: "approved",
+        revision: runPlan.revision,
+        digest: runPlan.digest,
+      }),
+    ).rejects.toThrow("Decision target digest is stale");
+    runPlan = (await repository.snapshot()).artifacts.find(
+      (candidate) => candidate.kind === "run_plan",
+    )!;
+    await expect(
+      repository.saveWorkPackageDraft(
+        [
+          { runPlanId: runPlan.id, sequence: 1 },
+          { runPlanId: runPlan.id, sequence: 2 },
+        ],
+        "duplicate",
+      ),
+    ).rejects.toThrow("Duplicate work-package member");
+    await repository.recordDecision({
+      artifactId: runPlan.id,
+      kind: "run_plan",
+      decision: "approved",
+    });
+    await expect(
+      repository.saveWorkPackageDraft(
+        [{ runPlanId: runPlan.id, sequence: 2 }],
+        "gapped sequence",
+      ),
+    ).rejects.toThrow("contiguous from 1");
+    await expect(
+      repository.validateSequenceProposal([runPlan.id], {
+        ordered_run_plan_ids: [runPlan.id],
+        rationale: "Single plan",
+      }),
+    ).resolves.toEqual({
+      orderedRunPlanIds: [runPlan.id],
+      rationale: "Single plan",
+    });
+    await expect(
+      repository.validateSequenceProposal([runPlan.id], {
+        ordered_run_plan_ids: [],
+        rationale: "missing plan",
+      }),
+    ).rejects.toThrow("Sequencing output is invalid");
+    const workPackage = await repository.saveWorkPackageDraft(
+      [{ runPlanId: runPlan.id, sequence: 1 }],
+      "One approved plan",
+    );
+    await repository.recordDecision({
+      artifactId: workPackage.id,
+      kind: "work_package",
+      decision: "approved",
+    });
+    const approvalFiles = await fs.readdir(
+      path.join(config.deliveryRepository, "control", "approvals"),
+    );
+    const packageApprovals = await Promise.all(
+      approvalFiles.map(
+        async (file) =>
+          JSON.parse(
+            await fs.readFile(
+              path.join(
+                config.deliveryRepository,
+                "control",
+                "approvals",
+                file,
+              ),
+              "utf8",
+            ),
+          ) as { bindings: unknown[] },
+      ),
+    );
+    const packageApproval = packageApprovals.find(
+      (candidate) => candidate.bindings.length === 2,
+    );
+    expect(packageApproval).toBeDefined();
+    expect(packageApproval!.bindings).toHaveLength(2);
+    expect(workPackage.kind).toBe("work_package");
+    expect(
+      (await repository.snapshot()).artifacts.some(
+        (candidate) => candidate.id === workPackage.id,
+      ),
+    ).toBe(true);
+  });
+
+  it("creates an isolated implementation worktree from the clean product baseline", async () => {
+    const config = await fixture();
+    await fs.mkdir(path.join(config.deliveryRepository, "system-plans"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(config.deliveryRepository, "system-plans", "system.md"),
+      "# Test system plan\n",
+    );
+    await run("git", ["-C", config.productRepository, "init", "-q"]);
+    await run("git", [
+      "-C",
+      config.productRepository,
+      "config",
+      "user.email",
+      "test@example.invalid",
+    ]);
+    await run("git", [
+      "-C",
+      config.productRepository,
+      "config",
+      "user.name",
+      "Dashboard test",
+    ]);
+    await fs.writeFile(
+      path.join(config.productRepository, "README.md"),
+      "# Product\n",
+    );
+    await run("git", ["-C", config.productRepository, "add", "."]);
+    await run("git", [
+      "-C",
+      config.productRepository,
+      "commit",
+      "-qm",
+      "baseline",
+    ]);
+    const state = new RuntimeState(config.runtimeDirectory);
+    states.push(state);
+    config.schemaDirectory = path.resolve(process.cwd(), "../../../schemas");
+    const registry = new SchemaRegistry(config);
+    await registry.load();
+    const repository = new DeliveryRepository(config, state, registry);
+    const snapshot = await repository.snapshot();
+    const requirement = snapshot.artifacts.find(
+      (artifact) => artifact.kind === "requirement",
+    )!;
+    const runPlan = snapshot.artifacts.find(
+      (artifact) => artifact.kind === "run_plan",
+    )!;
+    await repository.recordDecision({
+      artifactId: requirement.id,
+      kind: "requirement",
+      decision: "approved",
+    });
+    await repository.recordDecision({
+      artifactId: runPlan.id,
+      kind: "run_plan",
+      decision: "approved",
+    });
+    const workPackage = await repository.saveWorkPackageDraft(
+      [{ runPlanId: runPlan.id, sequence: 1 }],
+      "single plan",
+    );
+    await repository.recordDecision({
+      artifactId: workPackage.id,
+      kind: "work_package",
+      decision: "approved",
+    });
+    const baseline = (
+      await run("git", ["-C", config.productRepository, "rev-parse", "HEAD"])
+    ).stdout.trim();
+    const readyPreflight = await repository.preflight({
+      workPackageId: workPackage.id,
+      model: "gpt-5.6-luna",
+      reasoningEffort: "high",
+      adapter: "fake",
+    });
+    expect(readyPreflight).toMatchObject({ ready: true, blockers: [] });
+    expect(readyPreflight.checks.map((check) => check.name)).toEqual([
+      "Delivery repository",
+      "Product baseline",
+      "Delivery lock",
+      "System plan",
+      "Indexed artifacts",
+      "Work package",
+      "Dependencies and path rules",
+      "Requested profile",
+      "Orchestrator ownership",
+      "Codex adapter",
+      "Product worktree",
+    ]);
+    expect(
+      readyPreflight.checks.every((check) => check.status === "ready"),
+    ).toBe(true);
+    const started = await repository.startRun({
+      workPackageId: workPackage.id,
+      title: "Context menu test",
+      model: "gpt-5.6-luna",
+      reasoningEffort: "high",
+      adapter: "fake",
+    });
+    expect(started.baseCommit).toBe(baseline);
+    expect(started.adapter).toBe("fake");
+    expect(started.branch).toMatch(/^factory\/RUN-/);
+    expect(started.worktreePath).toBeDefined();
+    await expect(fs.access(started.worktreePath!)).resolves.toBeUndefined();
+    await fs.writeFile(
+      path.join(started.worktreePath!, "context-menu.txt"),
+      "implemented\n",
+    );
+    const isolatedDiff = await reviewProductDiff(
+      config,
+      baseline,
+      ["context-menu.txt"],
+      [],
+      started.worktreePath,
+    );
+    expect(isolatedDiff.entries).toEqual([
+      { path: "context-menu.txt", change: "??", classification: "allowed" },
+    ]);
+    expect(isolatedDiff.patch).toContain("context-menu.txt");
+    const evidence = await repository.recordValidationEvidence({
+      runId: started.runId,
+      baseCommit: baseline,
+      allowedPaths: ["context-menu.txt"],
+      forbiddenPaths: [],
+    });
+    expect(evidence.outcome).toBe("passed");
+    const approvedPlanBeforeProgress = (
+      await repository.snapshot()
+    ).artifacts.find((artifact) => artifact.id === runPlan.id)!;
+    await repository.saveExecutionProgress({
+      run_id: started.runId,
+      work_package_id: workPackage.id,
+      run_plan_id: runPlan.id,
+      run_plan_revision: runPlan.revision,
+      status: "in_progress",
+      current_phase_id: "PH-01",
+      current_task_id: "TASK-01",
+      tasks: [{ task_id: "TASK-01", status: "in_progress" }],
+    });
+    const approvedPlanAfterProgress = (
+      await repository.snapshot()
+    ).artifacts.find((artifact) => artifact.id === runPlan.id)!;
+    expect(approvedPlanAfterProgress).toMatchObject({
+      id: approvedPlanBeforeProgress.id,
+      revision: approvedPlanBeforeProgress.revision,
+      digest: approvedPlanBeforeProgress.digest,
+      status: "approved",
+    });
+    const failedQualityEvidence = await repository.recordValidationEvidence({
+      runId: started.runId,
+      baseCommit: baseline,
+      allowedPaths: ["context-menu.txt"],
+      forbiddenPaths: [],
+      qualityGates: ["product_lint"],
+    });
+    expect(failedQualityEvidence.outcome).toBe("failed");
+    expect(failedQualityEvidence.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "product_lint", status: "failed" }),
+      ]),
+    );
+    const partialQualityEvidence = await repository.recordValidationEvidence({
+      runId: started.runId,
+      baseCommit: baseline,
+      allowedPaths: ["context-menu.txt"],
+      forbiddenPaths: [],
+      requiredQualityGates: ["product_test"],
+    });
+    expect(partialQualityEvidence.outcome).toBe("failed");
+    expect(partialQualityEvidence.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "product_test", status: "failed" }),
+      ]),
+    );
+    await fs.writeFile(
+      path.join(config.productRepository, "factory.yaml"),
+      'quality_gates:\n  required:\n    - clean_install\n  runners:\n    clean_install:\n      executable: node\n      args: ["-e", "process.exit(0)"]\n      timeout_seconds: 10\n',
+    );
+    const declaredGateEvidence = await repository.recordValidationEvidence({
+      runId: started.runId,
+      baseCommit: baseline,
+      allowedPaths: ["context-menu.txt"],
+      forbiddenPaths: [],
+      qualityGates: ["manifest_validation"],
+    });
+    expect(declaredGateEvidence.outcome).toBe("passed");
+    expect(declaredGateEvidence.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "manifest_validation",
+          status: "passed",
+        }),
+        expect.objectContaining({
+          name: "clean_install",
+          status: "passed",
+        }),
+      ]),
+    );
+    await fs.rm(path.join(config.productRepository, "factory.yaml"), {
+      force: true,
+    });
+    repository.updateRun(started.runId, { total: 2 });
+    await expect(
+      repository.recordResultDisposition({
+        runId: started.runId,
+        decision: "accepted",
+        evidenceIds: ["EVD-NOT-REAL"],
+        reason: "An unknown evidence reference must not be accepted.",
+      }),
+    ).rejects.toThrow(/existing evidence/);
+    await expect(
+      repository.recordResultDisposition({
+        runId: started.runId,
+        decision: "accepted",
+        evidenceIds: [evidence.evidenceId],
+        reason: "Isolated worktree result accepted in test.",
+      }),
+    ).resolves.toMatchObject({ decision: "accepted", runId: started.runId });
+    expect(repository.getRun(started.runId)).toMatchObject({
+      status: "blocked",
+      progress: 50,
+      currentTask: expect.stringContaining("sequence 2"),
+    });
+    repository.updateRun(started.runId, { sequence: 2 });
+    await expect(
+      repository.recordResultDisposition({
+        runId: started.runId,
+        decision: "accepted",
+        evidenceIds: [evidence.evidenceId],
+        reason: "Final sequence accepted in test.",
+      }),
+    ).resolves.toMatchObject({ decision: "accepted", runId: started.runId });
+    expect(repository.getRun(started.runId)?.status).toBe("complete");
+    await repository.recordResultDisposition({
+      runId: started.runId,
+      decision: "accepted",
+      evidenceIds: [evidence.evidenceId],
+      reason: "Final sequence accepted in test.",
+    });
+    expect(
+      await fs.readdir(
+        path.join(config.deliveryRepository, "control", "dispositions"),
+      ),
+    ).toHaveLength(2);
+    expect(
+      (
+        await run("git", [
+          "-C",
+          config.productRepository,
+          "status",
+          "--porcelain",
+        ])
+      ).stdout.trim(),
+    ).toBe("");
+  }, 15000);
+
+  it("reports dirty-worktree, invalid-profile, and unknown-adapter preflight blockers", async () => {
+    const config = await fixture();
+    await run("git", ["-C", config.productRepository, "init", "-q"]);
+    await run("git", [
+      "-C",
+      config.productRepository,
+      "config",
+      "user.email",
+      "preflight-test@example.invalid",
+    ]);
+    await run("git", [
+      "-C",
+      config.productRepository,
+      "config",
+      "user.name",
+      "Preflight test",
+    ]);
+    await fs.writeFile(
+      path.join(config.productRepository, "README.md"),
+      "baseline\n",
+    );
+    await run("git", ["-C", config.productRepository, "add", "."]);
+    await run("git", [
+      "-C",
+      config.productRepository,
+      "commit",
+      "-qm",
+      "baseline",
+    ]);
+    await fs.appendFile(
+      path.join(config.productRepository, "README.md"),
+      "uncommitted\n",
+    );
+    const state = new RuntimeState(config.runtimeDirectory);
+    states.push(state);
+    config.schemaDirectory = path.resolve(process.cwd(), "../../../schemas");
+    const registry = new SchemaRegistry(config);
+    await registry.load();
+    const repository = new DeliveryRepository(config, state, registry);
+    const preflight = await repository.preflight({
+      workPackageId: "WP-NOT-REAL",
+      model: "unsupported-model",
+      reasoningEffort: "ultra",
+      adapter: "unknown-adapter",
+    });
+    expect(preflight.ready).toBe(false);
+    expect(preflight.blockers).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Work package"),
+        expect.stringContaining("Requested profile"),
+        expect.stringContaining("Codex adapter"),
+        expect.stringContaining("Product worktree"),
+      ]),
+    );
+  });
+
+  it("validates plan identifiers and makes identical draft saves idempotent", async () => {
+    const config = await fixture();
+    const state = new RuntimeState(config.runtimeDirectory);
+    states.push(state);
+    config.schemaDirectory = path.resolve(process.cwd(), "../../../schemas");
+    const registry = new SchemaRegistry(config);
+    await registry.load();
+    const repository = new DeliveryRepository(config, state, registry);
+    const requirement = (await repository.snapshot()).artifacts.find(
+      (artifact) => artifact.kind === "requirement",
+    )!;
+    await repository.recordDecision({
+      artifactId: requirement.id,
+      kind: "requirement",
+      decision: "approved",
+    });
+    const markdown = [
+      "# Context menu implementation",
+      "",
+      "## PH-01 Foundation",
+      "",
+      "- TASK-01 Add the menu service.",
+      "",
+      "## Verification",
+      "",
+      "Run the focused module tests.",
+      "",
+      "## Exit criteria",
+      "",
+      "The menu is available from the target view.",
+    ].join("\n");
+    const sidecar = {
+      planning: {
+        affected_modules: ["web"],
+        dependencies: [],
+        forbidden_paths: ["delivery/**"],
+        database_concerns: ["No migration expected."],
+        conflicts: [],
+        product_baseline: "a".repeat(40),
+      },
+      phases: [
+        {
+          phase_id: "PH-01",
+          title: "Foundation",
+          status: "not_started",
+          tasks: [
+            {
+              task_id: "TASK-01",
+              title: "Add the menu service",
+              status: "not_started",
+              allowed_paths: ["addons/**"],
+            },
+          ],
+        },
+      ],
+    };
+    const first = await repository.saveRunPlanDraft({
+      requirementId: requirement.id,
+      markdown,
+      sidecar,
+    });
+    const second = await repository.saveRunPlanDraft({
+      requirementId: requirement.id,
+      markdown,
+      sidecar,
+    });
+    expect(second.id).toBe(first.id);
+    expect(
+      (
+        await fs.readdir(path.join(config.deliveryRepository, "run-plans"))
+      ).filter((file) => file.startsWith(first.id)),
+    ).toHaveLength(2);
+    await repository.recordDecision({
+      artifactId: first.id,
+      kind: "run_plan",
+      decision: "approved",
+    });
+    const firstSidecarPath = path.join(
+      config.deliveryRepository,
+      first.path.replace(/\.md$/i, ".sidecar.json"),
+    );
+    const firstSidecar = JSON.parse(
+      await fs.readFile(firstSidecarPath, "utf8"),
+    );
+    firstSidecar.planning.forbidden_paths = ["delivery/**", "addons/**"];
+    await fs.writeFile(
+      firstSidecarPath,
+      JSON.stringify(firstSidecar, null, 2) + "\n",
+    );
+    const boundaryPackage = await repository.saveWorkPackageDraft(
+      [{ runPlanId: first.id, sequence: 1 }],
+      "Boundary conflict",
+    );
+    await repository.recordDecision({
+      artifactId: boundaryPackage.id,
+      kind: "work_package",
+      decision: "approved",
+    });
+    const boundaryPreflight = await repository.preflight({
+      workPackageId: boundaryPackage.id,
+      model: "gpt-5.6-luna",
+      reasoningEffort: "high",
+      adapter: "fake",
+    });
+    expect(boundaryPreflight.ready).toBe(false);
+    expect(boundaryPreflight.blockers).toContainEqual(
+      expect.stringContaining(
+        "overlapping allowed and forbidden path boundaries",
+      ),
+    );
+    await expect(repository.analyzeRunPlans([first.id])).resolves.toMatchObject(
+      {
+        plans: [
+          {
+            runPlanId: first.id,
+            affectedModules: ["web"],
+            forbiddenPaths: ["delivery/**", "addons/**"],
+            databaseConcerns: ["No migration expected."],
+            productBaseline: "a".repeat(40),
+          },
+        ],
+        productBaselines: ["a".repeat(40)],
+      },
+    );
+    const dependentPlan = await repository.saveRunPlanDraft({
+      requirementId: requirement.id,
+      markdown: markdown
+        .replace("# Context menu implementation", "# Context menu integration")
+        .replace("PH-01", "PH-02")
+        .replace("TASK-01", "TASK-02"),
+      sidecar: {
+        ...sidecar,
+        planning: {
+          ...sidecar.planning,
+          dependencies: [first.id],
+        },
+        phases: [
+          {
+            ...sidecar.phases[0],
+            phase_id: "PH-02",
+            tasks: [
+              {
+                ...sidecar.phases[0].tasks[0],
+                task_id: "TASK-02",
+                allowed_paths: ["addons/**"],
+              },
+            ],
+          },
+        ],
+      },
+    });
+    await repository.recordDecision({
+      artifactId: dependentPlan.id,
+      kind: "run_plan",
+      decision: "approved",
+    });
+    const multiPlanPackage = await repository.saveWorkPackageDraft(
+      [
+        { runPlanId: first.id, sequence: 1 },
+        { runPlanId: dependentPlan.id, sequence: 2 },
+      ],
+      "Dependency-aware multi-plan package",
+    );
+    await expect(
+      repository.readArtifact(multiPlanPackage.id),
+    ).resolves.toMatchObject({
+      content: expect.stringContaining(dependentPlan.id),
+    });
+    const invertedPackage = await repository.saveWorkPackageDraft(
+      [
+        { runPlanId: dependentPlan.id, sequence: 1 },
+        { runPlanId: first.id, sequence: 2 },
+      ],
+      "Invalid dependency order",
+    );
+    await repository.recordDecision({
+      artifactId: invertedPackage.id,
+      kind: "work_package",
+      decision: "approved",
+    });
+    const invertedPreflight = await repository.preflight({
+      workPackageId: invertedPackage.id,
+      model: "gpt-5.6-luna",
+      reasoningEffort: "high",
+      adapter: "fake",
+    });
+    expect(invertedPreflight.blockers).toContainEqual(
+      expect.stringContaining("Dependency order is invalid"),
+    );
+    await expect(
+      repository.analyzeRunPlans([first.id, dependentPlan.id]),
+    ).resolves.toMatchObject({
+      dependencyEdges: [
+        {
+          from: first.id,
+          to: dependentPlan.id,
+        },
+      ],
+      pathOverlaps: [
+        {
+          left: first.id,
+          right: dependentPlan.id,
+        },
+      ],
+    });
+    await expect(
+      repository.validateSequenceProposal([first.id, dependentPlan.id], {
+        ordered_run_plan_ids: [dependentPlan.id, first.id],
+        rationale: "Invalid dependency inversion",
+      }),
+    ).rejects.toThrow("violates dependency order");
+    const inconsistentPlan = await repository.saveRunPlanDraft({
+      requirementId: requirement.id,
+      markdown: markdown
+        .replace("# Context menu implementation", "# Context menu migration")
+        .replace("PH-01", "PH-03")
+        .replace("TASK-01", "TASK-03"),
+      sidecar: {
+        ...sidecar,
+        planning: {
+          ...sidecar.planning,
+          product_baseline: "b".repeat(40),
+        },
+        phases: [
+          {
+            ...sidecar.phases[0],
+            phase_id: "PH-03",
+            tasks: [
+              {
+                ...sidecar.phases[0].tasks[0],
+                task_id: "TASK-03",
+              },
+            ],
+          },
+        ],
+      },
+    });
+    await repository.recordDecision({
+      artifactId: inconsistentPlan.id,
+      kind: "run_plan",
+      decision: "approved",
+    });
+    await expect(
+      repository.validateSequenceProposal([first.id, inconsistentPlan.id], {
+        ordered_run_plan_ids: [first.id, inconsistentPlan.id],
+        rationale: "Inconsistent baselines",
+      }),
+    ).rejects.toThrow("inconsistent product baselines");
+    await expect(
+      repository.saveRunPlanDraft({
+        requirementId: requirement.id,
+        markdown,
+        sidecar: {
+          ...sidecar,
+          phases: [
+            {
+              ...sidecar.phases[0],
+              phase_id: "PH-02",
+            },
+          ],
+        },
+      }),
+    ).rejects.toThrow("phase identifiers must match");
+
+    const unboundPlan = await repository.saveRunPlanDraft({
+      requirementId: requirement.id,
+      markdown: markdown
+        .replace("PH-01", "PH-06")
+        .replace("TASK-01", "TASK-06"),
+      sidecar: {
+        ...sidecar,
+        phases: [
+          {
+            ...sidecar.phases[0],
+            phase_id: "PH-06",
+            tasks: [{ ...sidecar.phases[0].tasks[0], task_id: "TASK-06" }],
+          },
+        ],
+      },
+    });
+    const unboundPath = path.join(
+      config.deliveryRepository,
+      unboundPlan.path.replace(/\.md$/i, ".sidecar.json"),
+    );
+    const unboundSidecar = JSON.parse(await fs.readFile(unboundPath, "utf8"));
+    unboundSidecar.requirement.sha256 = "c".repeat(64);
+    await fs.writeFile(
+      unboundPath,
+      JSON.stringify(unboundSidecar, null, 2) + "\n",
+    );
+    await repository.recordDecision({
+      artifactId: unboundPlan.id,
+      kind: "run_plan",
+      decision: "approved",
+    });
+    const unboundPackage = await repository.saveWorkPackageDraft(
+      [{ runPlanId: unboundPlan.id, sequence: 1 }],
+      "Unbound requirement package",
+    );
+    await repository.recordDecision({
+      artifactId: unboundPackage.id,
+      kind: "work_package",
+      decision: "approved",
+    });
+    const unboundPreflight = await repository.preflight({
+      workPackageId: unboundPackage.id,
+      model: "gpt-5.6-luna",
+      reasoningEffort: "high",
+      adapter: "fake",
+    });
+    expect(unboundPreflight.blockers).toContainEqual(
+      expect.stringContaining(
+        "missing approval for its exact requirement revision",
+      ),
+    );
+
+    const cycleA = await repository.saveRunPlanDraft({
+      requirementId: requirement.id,
+      markdown: markdown
+        .replace("PH-01", "PH-04")
+        .replace("TASK-01", "TASK-04"),
+      sidecar: {
+        ...sidecar,
+        planning: { ...sidecar.planning, dependencies: ["RP-CYCLE-B"] },
+        phases: [
+          {
+            ...sidecar.phases[0],
+            phase_id: "PH-04",
+            tasks: [{ ...sidecar.phases[0].tasks[0], task_id: "TASK-04" }],
+          },
+        ],
+      },
+    });
+    const cycleB = await repository.saveRunPlanDraft({
+      requirementId: requirement.id,
+      markdown: markdown
+        .replace("PH-01", "PH-05")
+        .replace("TASK-01", "TASK-05"),
+      sidecar: {
+        ...sidecar,
+        planning: { ...sidecar.planning, dependencies: [cycleA.id] },
+        phases: [
+          {
+            ...sidecar.phases[0],
+            phase_id: "PH-05",
+            tasks: [{ ...sidecar.phases[0].tasks[0], task_id: "TASK-05" }],
+          },
+        ],
+      },
+    });
+    const cycleAPath = path.join(
+      config.deliveryRepository,
+      cycleA.path.replace(/\.md$/i, ".sidecar.json"),
+    );
+    const cycleASidecar = JSON.parse(await fs.readFile(cycleAPath, "utf8"));
+    cycleASidecar.planning.dependencies = [cycleB.id];
+    await fs.writeFile(
+      cycleAPath,
+      JSON.stringify(cycleASidecar, null, 2) + "\n",
+    );
+    await repository.recordDecision({
+      artifactId: cycleA.id,
+      kind: "run_plan",
+      decision: "approved",
+    });
+    await repository.recordDecision({
+      artifactId: cycleB.id,
+      kind: "run_plan",
+      decision: "approved",
+    });
+    await expect(
+      repository.analyzeRunPlans([cycleA.id, cycleB.id]),
+    ).resolves.toMatchObject({
+      dependencyCycles: [[cycleA.id, cycleB.id, cycleA.id]],
+    });
+    await expect(
+      repository.validateSequenceProposal([cycleA.id, cycleB.id], {
+        ordered_run_plan_ids: [cycleA.id, cycleB.id],
+        rationale: "Cycle must be rejected",
+      }),
+    ).rejects.toThrow("cyclic dependencies");
+  });
+
+  it("rejects artifacts whose filesystem target escapes through a symlink", async () => {
+    const config = await fixture();
+    const outside = path.join(
+      path.dirname(config.deliveryRepository),
+      "outside.md",
+    );
+    await fs.writeFile(outside, "outside delivery root\n");
+    await fs.symlink(
+      outside,
+      path.join(config.deliveryRepository, "requirements", "escape.md"),
+      "file",
+    );
+    const state = new RuntimeState(config.runtimeDirectory);
+    states.push(state);
+    config.schemaDirectory = path.resolve(process.cwd(), "../../../schemas");
+    const registry = new SchemaRegistry(config);
+    await registry.load();
+    const repository = new DeliveryRepository(config, state, registry);
+    const escape = (await repository.snapshot()).artifacts.find((artifact) =>
+      artifact.path.endsWith("requirements/escape.md"),
+    );
+    expect(escape).toBeDefined();
+    await expect(repository.readArtifact(escape!.id)).rejects.toThrow(
+      "escaped the delivery repository",
+    );
+  });
+
+  it("does not leave a partial approval when durable replacement is interrupted", async () => {
+    const config = await fixture();
+    const state = new RuntimeState(config.runtimeDirectory);
+    states.push(state);
+    config.schemaDirectory = path.resolve(process.cwd(), "../../../schemas");
+    const registry = new SchemaRegistry(config);
+    await registry.load();
+    const repository = new DeliveryRepository(config, state, registry);
+    const requirement = (await repository.snapshot()).artifacts.find(
+      (artifact) => artifact.kind === "requirement",
+    )!;
+    const rename = vi
+      .spyOn(fs, "rename")
+      .mockRejectedValueOnce(new Error("simulated durable-write interruption"));
+    await expect(
+      repository.recordDecision({
+        artifactId: requirement.id,
+        kind: "requirement",
+        decision: "approved",
+      }),
+    ).rejects.toThrow("simulated durable-write interruption");
+    rename.mockRestore();
+    const approvalDirectory = path.join(
+      config.deliveryRepository,
+      "control",
+      "approvals",
+    );
+    expect(
+      (await fs.readdir(approvalDirectory)).filter((file) =>
+        file.endsWith(".json"),
+      ),
+    ).toHaveLength(0);
+    expect(
+      (await fs.readdir(approvalDirectory)).filter((file) =>
+        file.endsWith(".tmp"),
+      ),
+    ).toHaveLength(0);
+  });
+});

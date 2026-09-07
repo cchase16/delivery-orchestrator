@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:odoo-development-factory:schema:requirement:1",
+  "title": "Canonical Requirement Revision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "requirement_id",
+    "revision",
+    "title",
+    "status",
+    "source",
+    "acceptance_criteria"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "requirement_id": {
+      "type": "string",
+      "pattern": "^REQ-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+    },
+    "revision": { "type": "integer", "minimum": 1 },
+    "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "status": {
+      "enum": ["draft", "awaiting_review", "approved", "rejected", "superseded"]
+    },
+    "source": { "type": "string", "minLength": 1, "maxLength": 1000 },
+    "system_plan_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "acceptance_criteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1, "maxLength": 4000 }
+    },
+    "affected_modules": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 200 }
+    },
+    "allowed_paths": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 1000 }
+    },
+    "forbidden_paths": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 1000 }
+    }
+  }
+}

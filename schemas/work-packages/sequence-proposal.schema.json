@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:odoo-development-factory:schema:sequence-proposal:1",
+  "title": "Work-package Sequence Proposal",
+  "description": "The constrained model output used to suggest order for an operator-selected set of approved run plans.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ordered_run_plan_ids", "rationale"],
+  "properties": {
+    "ordered_run_plan_ids": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "pattern": "^RP-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+      }
+    },
+    "rationale": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 12000
+    }
+  }
+}

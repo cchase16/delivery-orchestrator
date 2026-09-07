@@ -6,17 +6,19 @@
 |---|---|
 | Requirement | One approved business need with stable acceptance criteria. |
 | System plan | Overall architecture, sequencing, dependencies, and release strategy. |
-| Work package | One or more requirement revisions selected for implementation together. |
-| Run plan | Approved technical execution plan for one work package. |
-| Task | Smallest dispatchable agent, human, or deterministic unit. |
+| Run plan | Full phased implementation plan created from one approved requirement. |
+| Work package | One or more exact approved run-plan revisions arranged in an explicit execution sequence. |
+| Task | Stable development step within a run plan and the smallest unit whose progress is tracked. |
 | Release | Exact tested set of product revisions and completed work packages. |
 
 ## Grouping rules
 
-Batch size is not fixed. The planning agent recommends work packages using dependency order, overlapping product paths, shared Odoo models and migrations, required joint acceptance tests, database lineage, integration risk, and available execution capacity.
+Batch size is not fixed. The operator selects approved run plans for a work package. The sequencing agent then recommends their order using requirement dependencies, overlapping product paths, shared Odoo models and migrations, required joint acceptance tests, database lineage, integration risk, and available execution capacity.
 
-Independent work packages may run in parallel in isolated branches and worktrees. Coupled requirements share one work package when they must be designed, migrated, or accepted together.
+The MVP executes the run plans in a work package serially in ascending sequence order. Independent work packages may later run in parallel in isolated branches and worktrees. Coupled requirements may have their approved run plans grouped into one work package when they must be implemented, migrated, or accepted together.
+
+The approved run plan is immutable. Actual phase and task status is recorded as execution progress keyed by the stable identifiers in the plan, allowing agents to report completion without changing the approved plan digest.
 
 ## Authority
 
-The planning agent proposes grouping and ordering. Human approval establishes the plan. The deterministic orchestrator dispatches only approved and dependency-ready work packages.
+The run-plan generator proposes the phased implementation plan for one requirement. A human selects the approved run plans that belong to a work package, and the sequencing agent proposes their order. Humans approve both the run plans and final package sequence. The deterministic orchestrator dispatches only approved, dependency-ready run plans through an approved work package and follows its sequence.

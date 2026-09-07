@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "dist-backend",
+    "rootDir": "src",
+    "types": ["node"],
+    "declaration": true,
+    "sourceMap": true
+  },
+  "include": ["src/backend", "src/shared"]
+}

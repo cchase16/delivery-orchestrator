@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:odoo-development-factory:schema:execution-progress:1",
+  "title": "Run Plan Execution Progress",
+  "description": "Mutable runtime overlay; never edit the approved run-plan document to update progress.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "work_package_id",
+    "run_plan_id",
+    "run_plan_revision",
+    "status",
+    "tasks"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "run_id": {
+      "type": "string",
+      "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+    },
+    "work_package_id": {
+      "type": "string",
+      "pattern": "^WP-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+    },
+    "run_plan_id": {
+      "type": "string",
+      "pattern": "^RP-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+    },
+    "run_plan_revision": { "type": "integer", "minimum": 1 },
+    "status": {
+      "enum": [
+        "ready",
+        "in_progress",
+        "blocked",
+        "complete",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "current_phase_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "current_task_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "tasks": { "type": "array", "items": { "$ref": "#/$defs/task" } },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task_id", "status"],
+      "properties": {
+        "task_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "status": {
+          "enum": [
+            "not_started",
+            "in_progress",
+            "blocked",
+            "complete",
+            "deferred"
+          ]
+        },
+        "note": { "type": "string", "maxLength": 4000 }
+      }
+    }
+  }
+}

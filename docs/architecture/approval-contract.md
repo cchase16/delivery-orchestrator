@@ -48,8 +48,9 @@ Automated test success is validation evidence, not human approval. Agents cannot
 | Gate | Bound inputs |
 |---|---|
 | `requirement_acceptance` | Requirement document and requirement sidecar. |
-| `run_plan_approval` | Requirement revision, human-readable run plan, and run-plan sidecar. |
-| `implementation_acceptance` | Product commit, implementation evidence, and requirement acceptance criteria. |
-| `qa_release_approval` | Release candidate, test evidence, database rehearsal, exceptions, and release manifest. |
+| `run_plan_approval` | Requirement revision, relevant system-plan revision, human-readable phased implementation plan, and run-plan sidecar. |
+| `work_package_approval` | Work-package revision, ordered list of exact approved run-plan revisions, product baseline, and database baseline when applicable. |
+
+These are the three normal human gates for the dashboard MVP. Implementation result disposition, conditional diff-exception review, and release authorization may add immutable decisions later, but they are not required approval gates for the first workflow.
 
 The dashboard may collect the decision, but the orchestration core validates and records it.

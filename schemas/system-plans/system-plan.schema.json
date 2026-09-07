@@ -1,0 +1,288 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:odoo-development-factory:schema:system-plan:1",
+  "title": "System Plan",
+  "description": "Versioned overall architecture and delivery plan linking approved requirements to dependencies, capabilities, repositories, target releases, proposed work packages, risks, and assumptions.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "system_plan_id",
+    "revision",
+    "title",
+    "status",
+    "objective",
+    "target",
+    "approved_requirements",
+    "scope",
+    "architecture",
+    "proposed_work_packages",
+    "dependencies",
+    "risks",
+    "assumptions",
+    "release_strategy"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "system_plan_id": {
+      "type": "string",
+      "pattern": "^SPL-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+    },
+    "revision": { "type": "integer", "minimum": 1 },
+    "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "status": {
+      "enum": ["proposed", "approved", "superseded", "archived"]
+    },
+    "objective": { "type": "string", "minLength": 1, "maxLength": 10000 },
+    "target": { "$ref": "#/$defs/target" },
+    "approved_requirements": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/requirementReference" },
+      "default": []
+    },
+    "scope": { "$ref": "#/$defs/scope" },
+    "architecture": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 2000 }
+    },
+    "proposed_work_packages": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/workPackage" }
+    },
+    "dependencies": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/dependency" },
+      "default": []
+    },
+    "risks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/risk" },
+      "default": []
+    },
+    "assumptions": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 2000 },
+      "default": []
+    },
+    "release_strategy": { "$ref": "#/$defs/releaseStrategy" },
+    "supersedes": {
+      "$ref": "#/$defs/planReference"
+    }
+  },
+  "$defs": {
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repositories"],
+      "properties": {
+        "repositories": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/repository" }
+        },
+        "target_releases": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "default": []
+        }
+      }
+    },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository_id", "role"],
+      "properties": {
+        "repository_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "role": {
+          "enum": ["product", "delivery", "factory", "reference"]
+        },
+        "path": { "type": "string", "maxLength": 1000 }
+      }
+    },
+    "requirementReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requirement_id", "revision", "path"],
+      "properties": {
+        "requirement_id": {
+          "type": "string",
+          "pattern": "^REQ-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+        },
+        "revision": { "type": "integer", "minimum": 1 },
+        "path": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "role": {
+          "enum": ["primary", "dependency", "acceptance"]
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "known_capabilities",
+        "candidate_capabilities",
+        "out_of_scope"
+      ],
+      "properties": {
+        "known_capabilities": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/capability" }
+        },
+        "candidate_capabilities": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/capability" }
+        },
+        "out_of_scope": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "default": []
+        }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capability_id", "title", "description"],
+      "properties": {
+        "capability_id": {
+          "type": "string",
+          "pattern": "^CAP-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+        },
+        "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "description": { "type": "string", "minLength": 1, "maxLength": 5000 },
+        "requirement_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^REQ-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+          },
+          "default": []
+        }
+      }
+    },
+    "workPackage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "work_package_id",
+        "title",
+        "description",
+        "sequence",
+        "depends_on",
+        "requirement_ids"
+      ],
+      "properties": {
+        "work_package_id": {
+          "type": "string",
+          "pattern": "^WP-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+        },
+        "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "description": { "type": "string", "minLength": 1, "maxLength": 5000 },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "depends_on": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^WP-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+          },
+          "default": []
+        },
+        "requirement_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^REQ-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+          },
+          "default": []
+        },
+        "run_plan_refs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/runPlanReference" },
+          "default": []
+        },
+        "notes": { "type": "string", "maxLength": 5000 }
+      }
+    },
+    "runPlanReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_plan_id", "revision", "path", "sha256", "sequence"],
+      "properties": {
+        "run_plan_id": {
+          "type": "string",
+          "pattern": "^RP-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+        },
+        "revision": { "type": "integer", "minimum": 1 },
+        "path": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "sha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
+        "sequence": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "dependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dependency_id", "description", "status"],
+      "properties": {
+        "dependency_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "description": { "type": "string", "minLength": 1, "maxLength": 3000 },
+        "status": {
+          "enum": ["unresolved", "resolved", "blocked", "not_applicable"]
+        },
+        "owner": { "type": "string", "maxLength": 200 }
+      }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["risk_id", "description", "impact", "mitigation"],
+      "properties": {
+        "risk_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "description": { "type": "string", "minLength": 1, "maxLength": 3000 },
+        "impact": { "enum": ["low", "medium", "high", "critical"] },
+        "mitigation": { "type": "string", "minLength": 1, "maxLength": 3000 }
+      }
+    },
+    "releaseStrategy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["approach", "increments"],
+      "properties": {
+        "approach": { "type": "string", "minLength": 1, "maxLength": 5000 },
+        "increments": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/releaseIncrement" }
+        }
+      }
+    },
+    "releaseIncrement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["release_id", "description", "work_package_ids"],
+      "properties": {
+        "release_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "description": { "type": "string", "minLength": 1, "maxLength": 3000 },
+        "work_package_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^WP-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+          }
+        }
+      }
+    },
+    "planReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["system_plan_id", "revision", "path"],
+      "properties": {
+        "system_plan_id": {
+          "type": "string",
+          "pattern": "^SPL-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+        },
+        "revision": { "type": "integer", "minimum": 1 },
+        "path": { "type": "string", "minLength": 1, "maxLength": 1000 }
+      }
+    }
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:odoo-development-factory:schema:result-disposition:1",
+  "title": "Implementation Result Disposition",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "disposition_id",
+    "run_id",
+    "decision",
+    "issued_at",
+    "issued_by",
+    "evidence_ids",
+    "reason"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "disposition_id": {
+      "type": "string",
+      "pattern": "^DSP-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+    },
+    "decision": {
+      "enum": ["accepted", "exception_accepted", "rejected", "replan"]
+    },
+    "issued_at": { "type": "string", "format": "date-time" },
+    "issued_by": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actor_id", "actor_type", "display_name"],
+      "properties": {
+        "actor_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "actor_type": { "const": "human" },
+        "display_name": { "type": "string", "minLength": 1, "maxLength": 200 }
+      }
+    },
+    "evidence_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^EVD-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "reason": { "type": "string", "minLength": 1, "maxLength": 4000 }
+  }
+}

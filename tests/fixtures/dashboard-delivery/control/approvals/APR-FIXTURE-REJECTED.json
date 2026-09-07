@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "approval_id": "APR-FIXTURE-REJECTED",
+  "gate_id": "requirement_acceptance",
+  "decision": "rejected",
+  "issued_at": "2026-09-06T00:00:00Z",
+  "issued_by": {
+    "actor_id": "fixture-operator",
+    "actor_type": "human",
+    "role": "operator",
+    "authentication_method": "fixture"
+  },
+  "target": {
+    "system_id": "fixture-system",
+    "run_id": "RUN-FIXTURE",
+    "run_revision": 1
+  },
+  "bindings": [
+    {
+      "binding_type": "requirement",
+      "artifact_id": "REQ-FIXTURE-REJECTED",
+      "revision": 1,
+      "path": "requirements/REQ-FIXTURE-REJECTED.md",
+      "digest": {
+        "algorithm": "sha256",
+        "value": "0A7C879428ED57339533750FAAF0F60BAA2D67ECB16F96DB631589B45E2D3D34"
+      }
+    }
+  ],
+  "comments": "Fixture rejection reason"
+}

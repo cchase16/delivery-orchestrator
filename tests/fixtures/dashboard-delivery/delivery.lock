@@ -1,0 +1,17 @@
+lock_version: 1
+status: resolved
+
+repositories:
+  requirements_factory:
+    revision: fixture
+  delivery_orchestrator:
+    revision: fixture
+  development_factories:
+    odoo:
+      revision: fixture
+
+contracts:
+  requirement: 1
+  run_plan: 1
+  work_package: 1
+  approval: 1

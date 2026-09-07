@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "run_plan_id": "RP-FIXTURE-VALID",
+  "revision": 1,
+  "requirement": {
+    "id": "REQ-FIXTURE-APPROVED",
+    "revision": 1,
+    "path": "requirements/REQ-FIXTURE-APPROVED.md",
+    "sha256": "D558F225A87DF4D023C6CF105004E6B10CE4381FE1662DF58779A3A538DA4FAE"
+  },
+  "document": {
+    "id": "RP-FIXTURE-VALID",
+    "revision": 1,
+    "path": "run-plans/RP-FIXTURE-VALID.md",
+    "sha256": "C3970511D3EA7E1FFC4332FC8F5DE6670A5254A9C379F60D6094D91CD0143B8D"
+  },
+  "phases": [
+    {
+      "phase_id": "PH-01",
+      "title": "Build",
+      "status": "not_started",
+      "tasks": [
+        {
+          "task_id": "TASK-01",
+          "title": "Add the reusable context-menu service",
+          "status": "not_started",
+          "allowed_paths": ["addons/**"]
+        },
+        {
+          "task_id": "TASK-02",
+          "title": "Verify the supported list views",
+          "status": "not_started",
+          "allowed_paths": ["addons/**"]
+        }
+      ]
+    }
+  ]
+}
