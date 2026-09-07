@@ -1095,4 +1095,53 @@ describe("DeliveryRepository", () => {
       ),
     ).toHaveLength(0);
   });
+
+  it("resets workflow decisions while preserving authored artifacts", async () => {
+    const config = await fixture();
+    const state = new RuntimeState(config.runtimeDirectory);
+    states.push(state);
+    config.schemaDirectory = path.resolve(process.cwd(), "../../../schemas");
+    const registry = new SchemaRegistry(config);
+    await registry.load();
+    const repository = new DeliveryRepository(config, state, registry);
+    const requirement = (await repository.snapshot()).artifacts.find(
+      (artifact) => artifact.kind === "requirement",
+    )!;
+    await repository.recordDecision({
+      artifactId: requirement.id,
+      kind: "requirement",
+      decision: "approved",
+      revision: requirement.revision,
+      digest: requirement.digest,
+    });
+    for (const directory of ["control/dispositions", "control/commands"]) {
+      const absoluteDirectory = path.join(config.deliveryRepository, directory);
+      await fs.mkdir(absoluteDirectory, { recursive: true });
+      await fs.writeFile(
+        path.join(absoluteDirectory, "generated.json"),
+        "{}\n",
+      );
+    }
+
+    const result = await repository.resetWorkflowDecisions();
+    expect(result.removed["control/approvals"]).toBe(1);
+    expect(result.removed["control/events"]).toBe(1);
+    expect(result.removed["control/dispositions"]).toBe(1);
+    expect(result.removed["control/commands"]).toBe(1);
+    await expect(
+      fs.access(path.join(config.deliveryRepository, requirement.path)),
+    ).resolves.toBeUndefined();
+    await expect(
+      fs.access(
+        path.join(
+          config.deliveryRepository,
+          "run-plans",
+          "implementation-plan.md",
+        ),
+      ),
+    ).resolves.toBeUndefined();
+    expect((await repository.snapshot()).runtimeActions).toEqual([
+      expect.objectContaining({ actionType: "repository_reset" }),
+    ]);
+  });
 });

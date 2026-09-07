@@ -1465,6 +1465,68 @@ export class DeliveryRepository {
     return actionId;
   }
 
+  async resetWorkflowDecisions(): Promise<{
+    removed: Record<string, number>;
+    preserved: string[];
+  }> {
+    const activeRun = this.state.getActiveRun();
+    if (activeRun)
+      throw new Error(
+        `Cannot reset decisions while run ${activeRun.runId} is active. Stop or complete the run first.`,
+      );
+
+    const controlDirectories = [
+      "control/approvals",
+      "control/events",
+      "control/dispositions",
+      "control/commands",
+    ];
+    const removed: Record<string, number> = {};
+    await withFileLock(
+      path.join(this.config.runtimeDirectory, "delivery-write.lock"),
+      async () => {
+        for (const directory of controlDirectories) {
+          const absoluteDirectory = path.join(
+            this.config.deliveryRepository,
+            directory,
+          );
+          const files = (await walk(absoluteDirectory)).filter(
+            (file) => path.extname(file).toLowerCase() === ".json",
+          );
+          let count = 0;
+          for (const file of files) {
+            await fs.rm(file, { force: true });
+            count += 1;
+          }
+          removed[directory] = count;
+        }
+      },
+    );
+    this.state.resetWorkflowDecisions();
+    this.state.recordAction("repository_reset", {
+      removed,
+      preserved: [
+        "requirements",
+        "run-plans",
+        "work-packages",
+        "system-plans",
+        "evidence",
+        "releases",
+      ],
+    });
+    return {
+      removed,
+      preserved: [
+        "requirements",
+        "run-plans",
+        "work-packages",
+        "system-plans",
+        "evidence",
+        "releases",
+      ],
+    };
+  }
+
   async recordCommand(command: Record<string, unknown>): Promise<string> {
     if (!this.schemaRegistry)
       throw new Error("Schema registry is required to record commands.");

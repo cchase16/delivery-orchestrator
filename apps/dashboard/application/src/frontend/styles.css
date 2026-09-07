@@ -1592,6 +1592,44 @@ h2 {
 .save-profile {
   margin-top: 14px;
 }
+.settings-danger-zone {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin-top: 18px;
+  padding: 22px 0 12px;
+  border-top: 1px solid #e7ebf0;
+}
+.settings-danger-zone h2 {
+  margin: 6px 0 0;
+  font-size: 14px;
+  color: #8d3d3b;
+}
+.settings-danger-zone p {
+  max-width: 650px;
+  margin: 6px 0 0;
+  color: #75869a;
+  font-size: 11px;
+  line-height: 1.55;
+}
+.danger-button {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid #e7b3b1;
+  border-radius: 5px;
+  background: #fff7f6;
+  color: #b34a46;
+  padding: 9px 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.danger-button:hover {
+  border-color: #d78c88;
+  background: #fff0ef;
+}
 .empty-data,
 .empty-inline {
   min-height: 150px;
@@ -1892,6 +1930,14 @@ h2 {
   }
   .save-profile {
     margin-top: 0;
+  }
+  .settings-danger-zone {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .danger-button {
+    width: 100%;
+    justify-content: center;
   }
   .footer {
     padding: 0 16px;

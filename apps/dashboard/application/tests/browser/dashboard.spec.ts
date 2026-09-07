@@ -26,6 +26,61 @@ test("operator can move through the planning views", async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test("Settings exposes the confirmed repository reset action", async ({
+  page,
+}) => {
+  await page.goto("/?demo=1");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Reset repository", exact: true }),
+  ).toBeVisible();
+  page.once("dialog", async (dialog) => {
+    expect(dialog.type()).toBe("confirm");
+    expect(dialog.message()).toContain("Reset all approval decisions");
+    await dialog.dismiss();
+  });
+  await page
+    .getByRole("button", { name: "Reset repository", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Reset repository", exact: true }),
+  ).toBeVisible();
+});
+
+test("sidebar approval badge matches the pending approval count", async ({
+  page,
+}) => {
+  await page.route("**/api/snapshot", async (route) => {
+    const response = await route.fetch();
+    const snapshot = (await response.json()) as {
+      approvals: Array<Record<string, unknown>>;
+    };
+    snapshot.approvals = [
+      {
+        ...(snapshot.approvals[0] ?? {
+          id: "APR-ONE",
+          type: "requirement",
+          title: "Requirement approval",
+          artifactId: "REQ-ONE",
+          source: "requirements/one.md",
+          requestedBy: "Operator",
+          requestedAt: new Date().toISOString(),
+          priority: "medium",
+        }),
+        status: "pending",
+      },
+    ];
+    await route.fulfill({ response, json: snapshot });
+  });
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
+  await expect(
+    page
+      .getByRole("button", { name: "Approvals", exact: true })
+      .locator(".nav-count"),
+  ).toHaveText("1");
+});
+
 test("operator can reach every primary view and filter artifacts", async ({
   page,
 }) => {

@@ -166,6 +166,16 @@ export class RuntimeState {
     }));
   }
 
+  resetWorkflowDecisions(): void {
+    this.db.exec(`
+      DELETE FROM action_idempotency
+      WHERE idempotency_key LIKE 'decision:%'
+         OR idempotency_key LIKE 'disposition:%';
+      DELETE FROM actions
+      WHERE action_type IN ('decision', 'result_disposition');
+    `);
+  }
+
   close(): void {
     this.db.close();
   }

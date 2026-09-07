@@ -163,6 +163,25 @@ app.post("/api/reconcile", async () => {
   await reconcileRuntimeTask();
   return repository.snapshot();
 });
+app.post<{ Body: { confirm?: boolean } }>(
+  "/api/repository/reset",
+  async (request, reply) => {
+    if (request.body?.confirm !== true)
+      return reply
+        .code(400)
+        .send({ error: "Repository reset requires explicit confirmation." });
+    try {
+      return await repository.resetWorkflowDecisions();
+    } catch (cause) {
+      return reply.code(409).send({
+        error:
+          cause instanceof Error
+            ? cause.message
+            : "Unable to reset repository decisions.",
+      });
+    }
+  },
+);
 app.get<{
   Querystring: {
     workPackageId?: string;

@@ -442,6 +442,10 @@ export default function App() {
       <Sidebar
         page={page}
         mobileOpen={mobileNavOpen}
+        approvalCount={
+          data?.approvals.filter((item) => item.status === "pending").length ??
+          0
+        }
         onNavigate={(nextPage) => {
           setPage(nextPage);
           setMobileNavOpen(false);
@@ -493,6 +497,37 @@ export default function App() {
                   throw new Error("Unable to save prompt profile");
                 setNotice("Prompt profile saved");
               }}
+              onResetRepository={async () => {
+                if (
+                  !window.confirm(
+                    "Reset all approval decisions and workflow gates? Requirements, run plans, work packages, system plans, evidence, and releases will be kept.",
+                  )
+                )
+                  return;
+                try {
+                  const response = await fetch("/api/repository/reset", {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ confirm: true }),
+                  });
+                  if (!response.ok) {
+                    const result = (await response.json()) as {
+                      error?: string;
+                    };
+                    throw new Error(
+                      result.error ?? "Unable to reset repository decisions",
+                    );
+                  }
+                  setNotice("Repository decisions and gates reset");
+                  await loadSnapshot();
+                } catch (cause) {
+                  setNotice(
+                    cause instanceof Error
+                      ? cause.message
+                      : "Unable to reset repository decisions",
+                  );
+                }
+              }}
             />
           ) : null}
         </main>
@@ -524,10 +559,12 @@ function Sidebar({
   page,
   onNavigate,
   mobileOpen,
+  approvalCount,
 }: {
   page: Page;
   onNavigate: (page: Page) => void;
   mobileOpen: boolean;
+  approvalCount: number;
 }) {
   const items: Page[] = [
     "Overview",
@@ -566,7 +603,9 @@ function Sidebar({
             >
               <Icon size={18} />
               <span>{item}</span>
-              {item === "Approvals" && <span className="nav-count">2</span>}
+              {item === "Approvals" && approvalCount > 0 && (
+                <span className="nav-count">{approvalCount}</span>
+              )}
             </button>
           );
         })}
@@ -728,6 +767,7 @@ function PageContent({
   onDecision,
   onRunControl,
   onProfileUpdate,
+  onResetRepository,
 }: {
   page: Page;
   snapshot: Snapshot;
@@ -745,6 +785,7 @@ function PageContent({
     action: "pause" | "resume" | "cancel" | "complete" | "retry" | "replan",
   ) => Promise<void>;
   onProfileUpdate: (profile: PromptProfile) => Promise<void>;
+  onResetRepository: () => Promise<void>;
 }) {
   if (page === "Settings")
     return (
@@ -752,6 +793,7 @@ function PageContent({
         profiles={snapshot.promptProfiles}
         capabilities={capabilities}
         onUpdate={onProfileUpdate}
+        onResetRepository={onResetRepository}
       />
     );
   if (page === "Requirements")
@@ -3827,10 +3869,12 @@ function SettingsPage({
   profiles,
   capabilities,
   onUpdate,
+  onResetRepository,
 }: {
   profiles: PromptProfile[];
   capabilities: DashboardCapabilities;
   onUpdate: (profile: PromptProfile) => Promise<void>;
+  onResetRepository: () => Promise<void>;
 }) {
   return (
     <>
@@ -3868,6 +3912,24 @@ function SettingsPage({
             onUpdate={onUpdate}
           />
         ))}
+        <div className="settings-danger-zone">
+          <div>
+            <span className="section-kicker">DESTRUCTIVE ACTION</span>
+            <h2>Reset decisions and gates</h2>
+            <p>
+              Removes approval, rejection, workflow-event, disposition, and
+              command records while keeping requirements, run plans, work
+              packages, system plans, evidence, and releases.
+            </p>
+          </div>
+          <button
+            className="danger-button"
+            onClick={() => void onResetRepository()}
+          >
+            <RefreshCw size={15} />
+            Reset repository
+          </button>
+        </div>
       </section>
     </>
   );

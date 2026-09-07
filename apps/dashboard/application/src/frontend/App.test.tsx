@@ -80,6 +80,30 @@ describe("dashboard shell", () => {
     expect(screen.getByText("connection refused")).toBeTruthy();
   });
 
+  it("derives the navigation approval badge from pending decisions", async () => {
+    const pendingApproval = {
+      id: "APR-ONE",
+      type: "requirement" as const,
+      title: "Requirement approval",
+      artifactId: "REQ-ONE",
+      source: "requirements/one.md",
+      requestedBy: "Operator",
+      requestedAt: "2026-09-07T12:00:00.000Z",
+      priority: "medium" as const,
+      status: "pending" as const,
+    };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({ ...liveSnapshot, approvals: [pendingApproval] }),
+    } as Response);
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "Overview" });
+    expect(
+      screen.getByRole("button", { name: "Approvals" }).textContent,
+    ).toContain("1");
+  });
+
   it("preserves the last snapshot and reports partial validation data", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,
@@ -102,5 +126,43 @@ describe("dashboard shell", () => {
         screen.getByText("Partial data: validation issues detected"),
       ).toBeTruthy(),
     );
+  });
+
+  it("confirms and invokes the repository reset from Settings", async () => {
+    window.history.pushState({}, "", "/?demo=1");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => liveSnapshot,
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ removed: {}, preserved: [] }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => liveSnapshot,
+      } as Response);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "Overview" });
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reset repository" }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/repository/reset",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ confirm: true }),
+        }),
+      ),
+    );
+    expect(window.confirm).toHaveBeenCalledTimes(1);
+    expect(
+      await screen.findByText("Repository decisions and gates reset"),
+    ).toBeTruthy();
   });
 });
