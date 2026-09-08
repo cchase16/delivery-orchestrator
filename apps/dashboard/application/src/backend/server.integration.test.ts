@@ -189,6 +189,27 @@ describe("dashboard HTTP integration", () => {
       }),
     });
     expect(approvedRequirement.response.ok).toBe(true);
+    const generatedPlanTask = await request(port, "/api/prompt-tasks", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        taskType: "run_plan_generation",
+        artifactIds: [requirementArtifact.id],
+        adapter: "fake",
+      }),
+    });
+    expect(generatedPlanTask.response.ok).toBe(true);
+    const promptTasks = await request(port, "/api/prompt-tasks");
+    expect(promptTasks.value.tasks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          taskId: generatedPlanTask.value.taskId,
+          taskType: "run_plan_generation",
+          status: "completed",
+          adapter: "fake",
+        }),
+      ]),
+    );
     const markdown = `# Integration run plan
 
 ## Document status

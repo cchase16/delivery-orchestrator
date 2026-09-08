@@ -685,8 +685,31 @@ test("run-plan generation saves only the returned Markdown", async ({
       }),
     }),
   );
-  await page.route("**/api/prompt-tasks", async (route) =>
-    route.fulfill({
+  await page.route("**/api/prompt-tasks", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          tasks: [
+            {
+              taskId: "TASK-FAKE-HISTORIC",
+              taskType: "run_plan_generation",
+              status: "unknown",
+              output: "",
+              events: [],
+              adapter: "fake",
+              model: "gpt-5.6-sol",
+              reasoningEffort: "medium",
+              startedAt: "2026-09-06T10:00:00.000Z",
+            },
+          ],
+        }),
+      });
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
@@ -695,10 +718,25 @@ test("run-plan generation saves only the returned Markdown", async ({
         actualModel: "gpt-5.6-sol",
         actualReasoningEffort: "medium",
       }),
-    }),
-  );
-  await page.route("**/api/prompt-tasks/TASK-FAKE-BROWSER", async (route) =>
-    route.fulfill({
+    });
+  });
+  let taskPolls = 0;
+  await page.route("**/api/prompt-tasks/TASK-FAKE-BROWSER", async (route) => {
+    taskPolls += 1;
+    if (taskPolls === 1) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          taskId: "TASK-FAKE-BROWSER",
+          status: "inProgress",
+          output: "Inspecting the approved requirement and product baseline…",
+          events: [{ method: "item/agentMessage/delta" }],
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
@@ -733,8 +771,8 @@ test("run-plan generation saves only the returned Markdown", async ({
         ].join("\n"),
         events: [],
       }),
-    }),
-  );
+    });
+  });
   await page.route("**/api/run-plans/drafts", async (route) => {
     savedDrafts.push(JSON.parse(route.request().postData() ?? "{}"));
     await route.fulfill({
@@ -745,8 +783,15 @@ test("run-plan generation saves only the returned Markdown", async ({
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Run Plans", exact: true }).click();
+  await expect(page.getByText("Recent run-plan tasks")).toBeVisible();
+  await expect(page.getByText("TASK-FAKE-HISTORIC")).toBeVisible();
   await page.getByRole("button", { name: "Create run plan" }).click();
   await page.getByRole("button", { name: "Start standard prompt" }).click();
+  await expect(page.getByRole("button", { name: "Starting…" })).toBeVisible();
+  await expect(page.getByText("TASK-FAKE-BROWSER")).toBeVisible();
+  await expect(
+    page.getByText("Inspecting the approved requirement and product baseline…"),
+  ).toBeVisible();
   await expect(page.getByText("Save the reviewed model output")).toBeVisible();
   await expect(page.getByLabel("Run-plan Markdown")).toHaveValue(
     /Generated browser plan/,

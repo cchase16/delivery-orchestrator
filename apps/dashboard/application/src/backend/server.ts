@@ -20,6 +20,7 @@ import {
   supportedPromptModels,
   supportedReasoningEfforts,
 } from "./prompting.js";
+import type { CodexTaskSnapshot } from "./prompting.js";
 import { reviewProductDiff } from "./diff.js";
 import { SchemaRegistry } from "./validation.js";
 
@@ -35,6 +36,58 @@ const adapters = {
   codex_app_server: new CodexAppServerAdapter(),
   fake: new FakeExecutionAdapter(),
 };
+const startingPromptTaskTypes = new Set<PromptProfile["taskType"]>();
+
+type PromptTaskSummary = CodexTaskSnapshot & {
+  taskType: PromptProfile["taskType"];
+  adapter: keyof typeof adapters;
+  model: string;
+  reasoningEffort: string;
+  startedAt: string;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+async function listPromptTasks(): Promise<PromptTaskSummary[]> {
+  const summaries: PromptTaskSummary[] = [];
+  const seen = new Set<string>();
+  for (const action of state.listActions(100)) {
+    if (
+      action.actionType !== "prompt_task_started" ||
+      !isRecord(action.payload)
+    )
+      continue;
+    const actual = isRecord(action.payload.actual)
+      ? action.payload.actual
+      : undefined;
+    const requested = isRecord(action.payload.requested)
+      ? action.payload.requested
+      : undefined;
+    const taskId = typeof actual?.taskId === "string" ? actual.taskId : "";
+    if (!taskId || seen.has(taskId)) continue;
+    seen.add(taskId);
+    const adapterId =
+      requested?.adapter === "fake" ? "fake" : "codex_app_server";
+    const task = await adapters[adapterId].read?.(taskId);
+    if (!task) continue;
+    summaries.push({
+      ...task,
+      taskType: String(
+        action.payload.taskType ?? "run_plan_generation",
+      ) as PromptProfile["taskType"],
+      adapter: adapterId,
+      model: String(actual?.model ?? requested?.model ?? "unknown"),
+      reasoningEffort: String(
+        actual?.reasoningEffort ?? requested?.reasoningEffort ?? "unknown",
+      ),
+      startedAt: action.createdAt,
+    });
+    if (summaries.length >= 25) break;
+  }
+  return summaries;
+}
 
 async function reconcileRuntimeTask(): Promise<void> {
   const run = state.getActiveRun();
@@ -330,6 +383,42 @@ app.get<{ Params: { taskId: string } }>(
           cause instanceof Error
             ? cause.message
             : "Unable to read Codex task state.",
+      });
+    }
+  },
+);
+app.get("/api/prompt-tasks", async (_request, reply) => {
+  try {
+    return { tasks: await listPromptTasks() };
+  } catch (cause) {
+    return reply.code(409).send({
+      error:
+        cause instanceof Error ? cause.message : "Unable to list prompt tasks.",
+    });
+  }
+});
+app.post<{ Params: { taskId: string } }>(
+  "/api/prompt-tasks/:taskId/interrupt",
+  async (request, reply) => {
+    try {
+      const task = (await listPromptTasks()).find(
+        (candidate) => candidate.taskId === request.params.taskId,
+      );
+      if (!task)
+        return reply.code(404).send({ error: "Prompt task was not found." });
+      await adapters[task.adapter].interrupt?.(task.taskId);
+      state.recordAction(
+        "prompt_task_interrupted",
+        { taskId: task.taskId, taskType: task.taskType },
+        `prompt-task-interrupt:${task.taskId}`,
+      );
+      return await adapters[task.adapter].read?.(task.taskId);
+    } catch (cause) {
+      return reply.code(409).send({
+        error:
+          cause instanceof Error
+            ? cause.message
+            : "Unable to interrupt prompt task.",
       });
     }
   },
@@ -677,44 +766,65 @@ app.post<{
     const adapter = adapters[adapterId];
     if (!adapter)
       return reply.code(400).send({ error: `Unknown adapter: ${adapterId}` });
-    const capability = await adapter.probe();
-    if (!capability.available)
-      return reply.code(409).send({ error: capability.detail });
-    const result = await adapter.start(packet);
-    const actionId = state.recordAction(
-      "prompt_task_started",
-      {
+    if (startingPromptTaskTypes.has(packet.taskType))
+      return reply.code(409).send({
+        error: `A ${packet.taskType.replaceAll("_", " ")} task is already starting.`,
+      });
+    startingPromptTaskTypes.add(packet.taskType);
+    try {
+      const existing = (await listPromptTasks()).find(
+        (task) =>
+          task.taskType === packet.taskType &&
+          ["starting", "queued", "running", "inprogress"].includes(
+            task.status.toLowerCase(),
+          ),
+      );
+      if (existing)
+        return reply.code(409).send({
+          error: `Task ${existing.taskId} is already running. Interrupt it before starting another.`,
+          task: existing,
+        });
+      const capability = await adapter.probe();
+      if (!capability.available)
+        return reply.code(409).send({ error: capability.detail });
+      const result = await adapter.start(packet);
+      const actionId = state.recordAction(
+        "prompt_task_started",
+        {
+          taskType: packet.taskType,
+          promptMode: packet.promptMode,
+          templateVersion: packet.templateVersion,
+          redactionApplied: packet.redactionApplied,
+          inputArtifacts: packet.inputArtifacts,
+          requested: {
+            model: packet.model,
+            reasoningEffort: packet.reasoningEffort,
+            adapter: adapterId,
+          },
+          actual: {
+            model: result.actualModel,
+            reasoningEffort: result.actualReasoningEffort,
+            taskId: result.taskId,
+          },
+        },
+        `prompt-task:${packet.taskType}:${result.taskId}`,
+      );
+      return {
+        actionId,
+        taskId: result.taskId,
         taskType: packet.taskType,
         promptMode: packet.promptMode,
+        requestedModel: packet.model,
+        requestedReasoningEffort: packet.reasoningEffort,
+        actualModel: result.actualModel,
+        actualReasoningEffort: result.actualReasoningEffort,
+        adapter: adapterId,
         templateVersion: packet.templateVersion,
         redactionApplied: packet.redactionApplied,
-        inputArtifacts: packet.inputArtifacts,
-        requested: {
-          model: packet.model,
-          reasoningEffort: packet.reasoningEffort,
-          adapter: adapterId,
-        },
-        actual: {
-          model: result.actualModel,
-          reasoningEffort: result.actualReasoningEffort,
-          taskId: result.taskId,
-        },
-      },
-      `prompt-task:${packet.taskType}:${result.taskId}`,
-    );
-    return {
-      actionId,
-      taskId: result.taskId,
-      taskType: packet.taskType,
-      promptMode: packet.promptMode,
-      requestedModel: packet.model,
-      requestedReasoningEffort: packet.reasoningEffort,
-      actualModel: result.actualModel,
-      actualReasoningEffort: result.actualReasoningEffort,
-      adapter: adapterId,
-      templateVersion: packet.templateVersion,
-      redactionApplied: packet.redactionApplied,
-    };
+      };
+    } finally {
+      startingPromptTaskTypes.delete(packet.taskType);
+    }
   } catch (cause) {
     return reply.code(409).send({
       error:

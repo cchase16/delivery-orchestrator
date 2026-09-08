@@ -1,0 +1,231 @@
+{
+  "schema_version": 1,
+  "run_plan_id": "RP-ODOO-FORM-CONTEXT-MENU-CUSTOMIZATION-DESIGN",
+  "revision": 1,
+  "status": "draft",
+  "requirement": {
+    "id": "REQ-ODOO-FORM-CONTEXT-MENU-CUSTOMIZATION-DESIGN",
+    "revision": 1,
+    "path": "requirements/Odoo_Form_Context_Menu_Customization_Design.docx",
+    "sha256": "92fb3ca4e74a32cd0a43d254b100ad4d0baf95352debd102af85babc5518d334"
+  },
+  "document": {
+    "id": "RP-ODOO-FORM-CONTEXT-MENU-CUSTOMIZATION-DESIGN",
+    "revision": 1,
+    "path": "run-plans/RP-ODOO-FORM-CONTEXT-MENU-CUSTOMIZATION-DESIGN.md",
+    "sha256": "89c181127e88952c58a75f42387d68ea2755a7aaeddb5ccb596a78e4db9ee82f"
+  },
+  "planning": {
+    "dependencies": [],
+    "affected_modules": ["web_form_context_menu (new Odoo add-on)"],
+    "forbidden_paths": [
+      ".git/**",
+      "factory.yaml",
+      "factory.lock",
+      "requirements/**",
+      "addons/** except addons/web_form_context_menu/**",
+      "tests/** except tests/web_form_context_menu/**",
+      "docs/** except docs/web_form_context_menu/**",
+      "deployment/** except deployment/web_form_context_menu/**",
+      "../customer-odoo-delivery/**",
+      "../requirements-factory/**",
+      "../Odoo-development-factory/**",
+      "Odoo core source and Enterprise-only modules"
+    ],
+    "database_concerns": [
+      "No persistent model or migration is permitted; clean install, module update, and uninstall must still be rehearsed on disposable nonproduction databases.",
+      "Dirty and new-record navigation must delegate to Odoo guards and must never clear dirty state or discard edits directly."
+    ],
+    "conflicts": [
+      "factory.lock is unresolved at the product baseline, so governed execution cannot begin until the deterministic bootstrap process resolves it outside this plan's write boundary.",
+      "The organization's supported desktop-browser matrix is not supplied and must be recorded before browser acceptance execution.",
+      "Third-party add-ons may also intercept contextmenu events or alter form-controller internals; nearest-form ownership, event precedence, and representative compatibility tests are required."
+    ],
+    "product_baseline": "17a0c505e645d47babbf429528da3df2edbb5f1b"
+  },
+  "phases": [
+    {
+      "phase_id": "PH-01",
+      "title": "Confirm compatibility and establish the add-on",
+      "status": "not_started",
+      "tasks": [
+        {
+          "task_id": "TASK-01-01",
+          "title": "Record execution compatibility decisions",
+          "status": "not_started",
+          "allowed_paths": ["docs/web_form_context_menu/compatibility.md"],
+          "validation": [
+            "Confirm the note identifies the deployed Odoo commit or release, Community-only dependency boundary, browser versions/policy, and each adapter API used.",
+            "Confirm factory.lock reports resolved before governed implementation proceeds, without modifying it in this run."
+          ]
+        },
+        {
+          "task_id": "TASK-01-02",
+          "title": "Scaffold the standalone add-on and asset bundles",
+          "status": "not_started",
+          "allowed_paths": ["addons/web_form_context_menu/**"],
+          "validation": [
+            "Install the skeleton on a disposable Odoo Community database and load a backend form with no missing-module, asset, template, or JavaScript errors.",
+            "Assert the manifest declares no Enterprise dependency, server model, access-control CSV, controller, or data migration."
+          ]
+        },
+        {
+          "task_id": "TASK-01-03",
+          "title": "Establish deterministic frontend and browser test harnesses",
+          "status": "not_started",
+          "allowed_paths": ["addons/web_form_context_menu/static/tests/**", "tests/web_form_context_menu/**"],
+          "validation": ["Run the targeted frontend suite and confirm the main-form, dialog-form, non-form, independent-provider, and mocked-service fixtures initialize successfully."]
+        }
+      ]
+    },
+    {
+      "phase_id": "PH-02",
+      "title": "Build the reusable menu framework",
+      "status": "not_started",
+      "tasks": [
+        {
+          "task_id": "TASK-02-01",
+          "title": "Implement the registry and service facade contracts",
+          "status": "not_started",
+          "allowed_paths": ["addons/web_form_context_menu/static/src/**", "addons/web_form_context_menu/static/tests/**"],
+          "validation": [
+            "Run HOOT cases for defaults, deterministic ordering, groups, empty-group removal, hidden and disabled entries, duplicate identifiers, reserved identifiers, registry updates, and facade service exposure.",
+            "Prove predicates cannot require an RPC in the supported contract and raw HTML/source evaluation is absent."
+          ]
+        },
+        {
+          "task_id": "TASK-02-02",
+          "title": "Implement coordinator lifecycle and execution",
+          "status": "not_started",
+          "allowed_paths": ["addons/web_form_context_menu/static/src/**", "addons/web_form_context_menu/static/tests/**"],
+          "validation": [
+            "Run HOOT cases for nested roots, second right click, selection, Escape, outside click, route change, form destruction, resize, scroll, async completion, predicate/handler failure, listener cleanup, and future menu reopening.",
+            "Verify handled openings issue no RPC and unexpected custom logs contain no record values or caches."
+          ]
+        },
+        {
+          "task_id": "TASK-02-03",
+          "title": "Implement the Odoo 19 form adapter",
+          "status": "not_started",
+          "allowed_paths": ["addons/web_form_context_menu/static/src/**", "addons/web_form_context_menu/static/tests/**"],
+          "validation": [
+            "Confirm main-area, dialog, embedded, and nested form roots resolve correctly and non-form or failed initialization paths preserve the browser menu.",
+            "Confirm a static review or import-boundary test finds no version-sensitive controller imports or calls outside the adapter."
+          ]
+        },
+        {
+          "task_id": "TASK-02-04",
+          "title": "Implement the accessible Owl menu component",
+          "status": "not_started",
+          "allowed_paths": ["addons/web_form_context_menu/static/src/**", "addons/web_form_context_menu/static/tests/**"],
+          "validation": ["Run component tests for ARIA menu semantics, disabled reachability, every keyboard command, focus restoration, each viewport edge, dialogs, RTL, high-contrast focus, and browser zoom through 200 percent."]
+        }
+      ]
+    },
+    {
+      "phase_id": "PH-03",
+      "title": "Implement navigation and extension providers",
+      "status": "not_started",
+      "tasks": [
+        {
+          "task_id": "TASK-03-01",
+          "title": "Implement the navigation provider",
+          "status": "not_started",
+          "allowed_paths": ["addons/web_form_context_menu/static/src/**", "addons/web_form_context_menu/static/tests/**"],
+          "validation": [
+            "Prove each supported command delegates to the verified Odoo API and unavailable commands remain visible but disabled where practical.",
+            "Prove no browser history, whole-window reload, simulated pager click, direct route mutation, dirty-flag clearing, or silent discard path exists."
+          ]
+        },
+        {
+          "task_id": "TASK-03-02",
+          "title": "Implement the Main Table placeholder provider",
+          "status": "not_started",
+          "allowed_paths": ["addons/web_form_context_menu/**"],
+          "validation": [
+            "Assert exact source label and body, one Close action, discovery and execution through the public registry/coordinator, always-enabled supported-form visibility, and zero navigation calls.",
+            "Remove the provider from the test asset set and prove only this item disappears while navigation and independent extensions still pass."
+          ]
+        },
+        {
+          "task_id": "TASK-03-03",
+          "title": "Prove third-party extension compatibility",
+          "status": "not_started",
+          "allowed_paths": ["tests/web_form_context_menu/**", "addons/web_form_context_menu/static/tests/**"],
+          "validation": ["Install or load the fixture independently and assert deterministic ordering, conditional behavior, service facade access, async completion, error isolation, and no competing menu shell."]
+        }
+      ]
+    },
+    {
+      "phase_id": "PH-04",
+      "title": "Harden quality, security, and compatibility",
+      "status": "not_started",
+      "tasks": [
+        {
+          "task_id": "TASK-04-01",
+          "title": "Complete integration and browser acceptance coverage",
+          "status": "not_started",
+          "allowed_paths": ["tests/web_form_context_menu/**"],
+          "validation": [
+            "Run every browser scenario and confirm handled form events show exactly one custom menu, while list, kanban, website/portal where present, and initialization-failure scenarios retain native behavior.",
+            "Verify dialog stacking and closure, route transitions, unsaved-change prompts, and no lost edits."
+          ]
+        },
+        {
+          "task_id": "TASK-04-02",
+          "title": "Validate accessibility, localization, and performance",
+          "status": "not_started",
+          "allowed_paths": ["addons/web_form_context_menu/**", "tests/web_form_context_menu/**", "docs/web_form_context_menu/**"],
+          "validation": [
+            "Show keyboard users can open, traverse, activate, dismiss, and regain focus; confirm layout remains usable in RTL and at 200 percent zoom.",
+            "Measure ordinary openings at no more than 100 milliseconds under the documented normal desktop load and assert zero menu-open RPC calls."
+          ]
+        },
+        {
+          "task_id": "TASK-04-03",
+          "title": "Review security, lifecycle, and addon conflicts",
+          "status": "not_started",
+          "allowed_paths": ["addons/web_form_context_menu/**", "tests/web_form_context_menu/**", "docs/web_form_context_menu/**"],
+          "validation": [
+            "Static and runtime checks find no eval, dynamic function construction, raw HTML injection, direct network request, or client-only authorization decision.",
+            "Stress tests show registrations/listeners are removed, repeat activation is safe, failures stay item-scoped, and known interceptor precedence is deterministic or explicitly documented."
+          ]
+        },
+        {
+          "task_id": "TASK-04-04",
+          "title": "Publish extension and operational documentation",
+          "status": "not_started",
+          "allowed_paths": ["docs/web_form_context_menu/**"],
+          "validation": ["Follow the documentation to recreate the independent extension fixture and confirm the example passes its tests without framework edits."]
+        }
+      ]
+    },
+    {
+      "phase_id": "PH-05",
+      "title": "Rehearse deployment and rollback",
+      "status": "not_started",
+      "tasks": [
+        {
+          "task_id": "TASK-05-01",
+          "title": "Rehearse clean install and module update",
+          "status": "not_started",
+          "allowed_paths": ["deployment/web_form_context_menu/**", "tests/web_form_context_menu/**"],
+          "validation": [
+            "Confirm clean install and update complete without schema creation, migration, missing assets, stale bundles, or regression failures.",
+            "Confirm the evidence binds the exact product commit, database lineage, Odoo version, browser matrix, commands, and results."
+          ]
+        },
+        {
+          "task_id": "TASK-05-02",
+          "title": "Rehearse rollback and finalize rollout checks",
+          "status": "not_started",
+          "allowed_paths": ["deployment/web_form_context_menu/**", "tests/web_form_context_menu/**"],
+          "validation": [
+            "Confirm rollback restores native behavior inside forms, leaves non-form behavior unchanged, removes module assets, and requires no data migration.",
+            "Dry-run the rollout and rollback checklists and verify all human approval points remain open for authorized actors; the implementing agent records no approval."
+          ]
+        }
+      ]
+    }
+  ]
+}

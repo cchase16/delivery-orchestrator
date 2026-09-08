@@ -523,15 +523,32 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
     });
     const lines = readline.createInterface({ input: child.stdout });
     let nextId = 0;
+    let activeThreadId = "";
+    let activeTurnId = "";
     const events: Array<Record<string, unknown>> = [];
     lines.on("line", (line) => {
       try {
         const message = JSON.parse(line) as Record<string, unknown>;
-        if (message.id === undefined && typeof message.method === "string")
+        if (message.id === undefined && typeof message.method === "string") {
           events.push(message);
+          if (message.method === "turn/completed") {
+            const shutdown = setTimeout(() => child.kill(), 50);
+            shutdown.unref();
+          }
+        }
       } catch {
         // Ignore diagnostic lines; JSON-RPC notifications are captured above.
       }
+    });
+    child.once("exit", () => {
+      if (activeThreadId) {
+        this.completedEvents.set(activeThreadId, {
+          events,
+          turnId: activeTurnId,
+        });
+        this.sessions.delete(activeThreadId);
+      }
+      lines.close();
     });
     const send = (method: string, params: unknown, id?: number) => {
       child.stdin.write(
@@ -582,6 +599,7 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
       const threadId = String(threadResponse.result?.thread?.id ?? "");
       if (!threadId)
         throw new Error("Codex App Server did not return a thread id.");
+      activeThreadId = threadId;
       if (packet.promptMode === "goal") {
         const goalId = ++nextId;
         const goalResponse = this.awaitResponse(lines, child, goalId);
@@ -622,6 +640,7 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
       const turnId = String(turnResponseValue.result?.turn?.id ?? "");
       if (!turnId)
         throw new Error("Codex App Server did not return a turn id.");
+      activeTurnId = turnId;
       this.sessions.set(threadId, {
         child,
         lines,
@@ -629,11 +648,6 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
         turnId,
         send,
         nextId: () => ++nextId,
-      });
-      child.once("exit", () => {
-        this.completedEvents.set(threadId, { events, turnId });
-        this.sessions.delete(threadId);
-        lines.close();
       });
       return {
         taskId: threadId,

@@ -61,6 +61,17 @@ type PackageMemberSummary = {
   path: string;
   sequence: number;
 };
+type PromptTaskMonitor = {
+  taskId: string;
+  taskType: string;
+  status: string;
+  output: string;
+  events: Array<Record<string, unknown>>;
+  adapter: string;
+  model: string;
+  reasoningEffort: string;
+  startedAt: string;
+};
 type DashboardCapabilities = {
   models: string[];
   reasoningEfforts: ReasoningEffort[];
@@ -294,6 +305,67 @@ function StatusBadge({ status }: { status: string }) {
       <StatusMark status={status} />
       {status.replaceAll("_", " ")}
     </span>
+  );
+}
+function PromptTaskActivity({
+  tasks,
+  currentTaskId,
+  onInterrupt,
+}: {
+  tasks: PromptTaskMonitor[];
+  currentTaskId?: string;
+  onInterrupt: (taskId: string) => void;
+}) {
+  const visibleTasks = tasks.filter((task) => task.taskId !== currentTaskId);
+  if (visibleTasks.length === 0) return null;
+  return (
+    <section className="prompt-task-list" aria-live="polite">
+      <div>
+        <span className="section-kicker">GENERATION ACTIVITY</span>
+        <h3>Recent run-plan tasks</h3>
+        <p>
+          Running tasks update automatically. Output is available while the
+          dashboard process owns the task.
+        </p>
+      </div>
+      {visibleTasks.map((task) => {
+        const isActive = [
+          "starting",
+          "queued",
+          "running",
+          "inprogress",
+        ].includes(task.status.toLowerCase());
+        return (
+          <article className="prompt-task-row" key={task.taskId}>
+            <div className="prompt-task-row-heading">
+              <div>
+                <strong>{task.taskId}</strong>
+                <small>
+                  {task.adapter} · {task.model} · {task.reasoningEffort}{" "}
+                  reasoning · {new Date(task.startedAt).toLocaleString()}
+                </small>
+              </div>
+              <StatusBadge status={task.status} />
+            </div>
+            {task.output && (
+              <pre className="task-output">{task.output.slice(-4000)}</pre>
+            )}
+            <div className="prompt-task-row-footer">
+              <span>{task.events.length} events received</span>
+              {isActive && (
+                <button
+                  className="danger-button"
+                  onClick={() => onInterrupt(task.taskId)}
+                >
+                  <XCircle size={14} />
+                  Interrupt
+                </button>
+              )}
+            </div>
+          </article>
+        );
+      })}
+    </section>
   );
 }
 
@@ -1325,10 +1397,44 @@ function ArtifactPage({
     actualModel: string;
     actualReasoningEffort: string;
   } | null>(null);
+  const [promptTaskSnapshot, setPromptTaskSnapshot] = useState<{
+    status: string;
+    output: string;
+    events: Array<Record<string, unknown>>;
+  } | null>(null);
+  const [isStartingRunPlan, setIsStartingRunPlan] = useState(false);
   const [promptError, setPromptError] = useState<string | null>(null);
   const [draftMarkdown, setDraftMarkdown] = useState("");
   const [draftSaved, setDraftSaved] = useState<string | null>(null);
   const [supersedesRunPlanId, setSupersedesRunPlanId] = useState("");
+  const [promptTasks, setPromptTasks] = useState<PromptTaskMonitor[]>([]);
+  useEffect(() => {
+    if (
+      kind !== "run_plan" ||
+      new URLSearchParams(window.location.search).has("demo")
+    )
+      return;
+    let cancelled = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      try {
+        const response = await fetch("/api/prompt-tasks");
+        const result = (await response.json()) as {
+          tasks?: PromptTaskMonitor[];
+        };
+        if (!response.ok) throw new Error("Task list is unavailable.");
+        if (!cancelled) setPromptTasks(result.tasks ?? []);
+      } catch {
+        // The current-task monitor reports connection errors in context.
+      }
+      if (!cancelled) timer = window.setTimeout(() => void poll(), 1500);
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [kind]);
   useEffect(() => {
     if (
       kind !== "run_plan" ||
@@ -1338,7 +1444,6 @@ function ArtifactPage({
       return;
     let cancelled = false;
     let timer: number | undefined;
-    let applied = false;
     const poll = async () => {
       try {
         const response = await fetch(
@@ -1347,34 +1452,60 @@ function ArtifactPage({
         const result = (await response.json()) as {
           status?: string;
           output?: string;
+          events?: Array<Record<string, unknown>>;
         };
         if (!response.ok) throw new Error("Task output is unavailable.");
+        setPromptTaskSnapshot({
+          status: result.status ?? "unknown",
+          output: result.output ?? "",
+          events: result.events ?? [],
+        });
+        let extracted: string | null = null;
         if (result.output) {
-          const extracted = extractRunPlanOutput(result.output);
+          extracted = extractRunPlanOutput(result.output);
           if (extracted) {
-            applied = true;
             setDraftMarkdown(extracted);
             setPromptError(null);
           }
         }
+        const normalizedStatus = result.status?.toLowerCase() ?? "unknown";
         const terminal = [
           "completed",
           "complete",
           "succeeded",
           "failed",
           "error",
+          "interrupted",
           "cancelled",
           "canceled",
-        ].includes(result.status?.toLowerCase() ?? "");
-        if (terminal && !applied && result.output)
+          "unknown",
+        ].includes(normalizedStatus);
+        const succeeded = ["completed", "complete", "succeeded"].includes(
+          normalizedStatus,
+        );
+        if (terminal && !succeeded) {
           setPromptError(
-            "The task completed without a parseable Markdown plan; review the output and enter the canonical draft manually.",
+            normalizedStatus === "unknown"
+              ? "The task state is no longer available. The dashboard process or its App Server process may have stopped. Start a new generation task."
+              : `The generation task ended with status ${result.status ?? "unknown"}${result.output ? ". Review the task output below." : " without producing output."}`,
           );
-        if (!cancelled && !applied && !terminal)
+        } else if (terminal && !extracted) {
+          setPromptError(
+            "The task completed without a parseable Markdown plan; review the output below and enter the canonical draft manually.",
+          );
+        }
+        if (!cancelled && !terminal)
           timer = window.setTimeout(() => void poll(), 1500);
       } catch (cause) {
         if (!cancelled) timer = window.setTimeout(() => void poll(), 2500);
-        if (!cancelled && cause instanceof Error) setPromptError(cause.message);
+        if (!cancelled && cause instanceof Error) {
+          setPromptTaskSnapshot((current) => ({
+            status: "connection_error",
+            output: current?.output ?? "",
+            events: current?.events ?? [],
+          }));
+          setPromptError(cause.message);
+        }
       }
     };
     void poll();
@@ -1422,6 +1553,7 @@ function ArtifactPage({
         prompt: result.prompt ?? "",
       });
       setPromptTask(null);
+      setPromptTaskSnapshot(null);
       setPromptError(null);
     } catch (cause) {
       setPromptError(
@@ -1442,6 +1574,10 @@ function ArtifactPage({
       );
       return;
     }
+    setIsStartingRunPlan(true);
+    setPromptTask(null);
+    setPromptTaskSnapshot(null);
+    setPromptError(null);
     try {
       const response = await fetch("/api/prompt-tasks", {
         method: "POST",
@@ -1473,11 +1609,37 @@ function ArtifactPage({
         actualReasoningEffort:
           result.actualReasoningEffort ?? profile.reasoningEffort,
       });
+      setPromptTaskSnapshot({ status: "starting", output: "", events: [] });
       setDraftSaved(null);
       setPromptError(null);
     } catch (cause) {
       setPromptError(
         cause instanceof Error ? cause.message : "Unable to start generation.",
+      );
+    } finally {
+      setIsStartingRunPlan(false);
+    }
+  }
+  async function interruptPromptTask(taskId: string) {
+    try {
+      const response = await fetch(
+        `/api/prompt-tasks/${encodeURIComponent(taskId)}/interrupt`,
+        { method: "POST" },
+      );
+      const result = (await response.json()) as { error?: string };
+      if (!response.ok)
+        throw new Error(result.error ?? "Unable to interrupt generation.");
+      setPromptError(null);
+      setPromptTasks((tasks) =>
+        tasks.map((task) =>
+          task.taskId === taskId ? { ...task, status: "interrupted" } : task,
+        ),
+      );
+    } catch (cause) {
+      setPromptError(
+        cause instanceof Error
+          ? cause.message
+          : "Unable to interrupt generation.",
       );
     }
   }
@@ -1518,6 +1680,14 @@ function ArtifactPage({
   }
   const approvedRequirement = snapshot.artifacts.find(
     (item) => item.kind === "requirement" && item.status === "approved",
+  );
+  const runPlanPromptTasks = promptTasks.filter(
+    (task) => task.taskType === "run_plan_generation",
+  );
+  const activePromptTask = runPlanPromptTasks.find((task) =>
+    ["starting", "queued", "running", "inprogress"].includes(
+      task.status.toLowerCase(),
+    ),
   );
   return (
     <>
@@ -1612,6 +1782,11 @@ function ArtifactPage({
           </div>
         </div>
       )}
+      <PromptTaskActivity
+        tasks={runPlanPromptTasks}
+        currentTaskId={promptTask?.taskId}
+        onInterrupt={(taskId) => void interruptPromptTask(taskId)}
+      />
       {promptPreview && (
         <section className="panel prompt-preview">
           <div className="panel-title">
@@ -1684,23 +1859,88 @@ function ArtifactPage({
             <button
               className="primary-button"
               onClick={() => void startRunPlanGeneration()}
+              disabled={isStartingRunPlan || Boolean(activePromptTask)}
+              aria-busy={isStartingRunPlan}
             >
-              <Play size={15} />
-              Start standard prompt
+              {isStartingRunPlan || activePromptTask ? (
+                <Loader2 className="spin" size={15} />
+              ) : (
+                <Play size={15} />
+              )}
+              {isStartingRunPlan
+                ? "Starting…"
+                : activePromptTask
+                  ? "Generation already running"
+                  : "Start standard prompt"}
             </button>
             <span className="muted-label">
               Template {promptPreview.templateVersion}
             </span>
           </div>
-          <pre>{promptPreview.prompt}</pre>
-          {promptTask && (
-            <div className="empty-inline">
-              <CheckCircle2 size={17} />
-              Task {promptTask.taskId} started through {promptTask.adapter} ·{" "}
-              {promptTask.actualModel} · {promptTask.actualReasoningEffort}{" "}
-              reasoning
+          {(isStartingRunPlan || promptTask || promptError) && (
+            <div
+              className="progress-overlay prompt-task-progress"
+              role="status"
+              aria-live="polite"
+            >
+              <div className="panel-title">
+                <div>
+                  <span className="section-kicker">CODEX TASK</span>
+                  <h2>
+                    {isStartingRunPlan
+                      ? "Starting App Server and task…"
+                      : (promptTask?.taskId ?? "Generation could not start")}
+                  </h2>
+                </div>
+                {isStartingRunPlan ||
+                ["starting", "inprogress"].includes(
+                  promptTaskSnapshot?.status.toLowerCase() ?? "",
+                ) ? (
+                  <Loader2 className="spin" size={18} />
+                ) : (
+                  <StatusBadge
+                    status={
+                      promptTaskSnapshot?.status ??
+                      (promptError ? "error" : "started")
+                    }
+                  />
+                )}
+              </div>
+              {promptTask && (
+                <small className="muted-label prompt-task-meta">
+                  {promptTask.adapter} · {promptTask.actualModel} ·{" "}
+                  {promptTask.actualReasoningEffort} reasoning ·{" "}
+                  {promptTaskSnapshot?.events.length ?? 0} events received
+                </small>
+              )}
+              {promptTaskSnapshot?.output && (
+                <pre className="task-output">
+                  {promptTaskSnapshot.output.slice(-4000)}
+                </pre>
+              )}
+              {promptTask &&
+                ["starting", "queued", "running", "inprogress"].includes(
+                  promptTaskSnapshot?.status.toLowerCase() ?? "starting",
+                ) && (
+                  <div className="prompt-task-row-footer">
+                    <span>Output updates automatically.</span>
+                    <button
+                      className="danger-button"
+                      onClick={() =>
+                        void interruptPromptTask(promptTask.taskId)
+                      }
+                    >
+                      <XCircle size={14} />
+                      Interrupt
+                    </button>
+                  </div>
+                )}
+              {promptError && (
+                <p className="prompt-task-error">{promptError}</p>
+              )}
             </div>
           )}
+          <pre>{promptPreview.prompt}</pre>
           {promptTask &&
             !new URLSearchParams(window.location.search).has("demo") && (
               <div className="draft-output">
