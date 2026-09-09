@@ -769,6 +769,11 @@ describe("DeliveryRepository", () => {
     });
     expect(second.id).toBe(first.id);
     expect(
+      (await repository.snapshot()).artifacts.find(
+        (artifact) => artifact.id === first.id,
+      )?.relatedRequirementId,
+    ).toBe(requirement.id);
+    expect(
       (
         await fs.readdir(path.join(config.deliveryRepository, "run-plans"))
       ).filter((file) => file.startsWith(first.id)),

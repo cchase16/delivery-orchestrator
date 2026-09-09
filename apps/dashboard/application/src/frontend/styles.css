@@ -1067,6 +1067,22 @@ h2 {
     monospace;
   text-transform: none;
 }
+.draft-save-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #e7b3b1;
+  border-radius: 6px;
+  background: #fff7f6;
+  color: #a34845;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.draft-save-error svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
 .planning-layout,
 .validation-grid {
   display: grid;

@@ -77,6 +77,14 @@ function requiredFieldValues(lines: string[], label: string): string[] {
 }
 
 function requireSingleValue(lines: string[], label: string): string {
+  const pattern = new RegExp(
+    `^(\\s*)(?:-\\s+)?\\*\\*${escapeRegExp(label)}:\\*\\*\\s*(.*)$`,
+    "i",
+  );
+  const inline = lines
+    .map((line) => line.match(pattern)?.[2]?.trim() ?? "")
+    .find(Boolean);
+  if (inline) return cleanValue(inline);
   const values = requiredFieldValues(lines, label);
   if (values.length !== 1)
     throw new Error(

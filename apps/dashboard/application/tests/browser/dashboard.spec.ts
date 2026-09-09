@@ -577,6 +577,8 @@ test("run-plan generation saves only the returned Markdown", async ({
   page,
 }) => {
   const savedDrafts: Array<Record<string, unknown>> = [];
+  const previewRequests: Array<Record<string, unknown>> = [];
+  const taskRequests: Array<Record<string, unknown>> = [];
   const snapshot = {
     generatedAt: "2026-09-06T12:00:00.000Z",
     system: {
@@ -596,7 +598,7 @@ test("run-plan generation saves only the returned Markdown", async ({
     artifacts: [
       {
         id: "REQ-BROWSER-001",
-        title: "Browser requirement",
+        title: "First approved requirement",
         kind: "requirement",
         path: "requirements/REQ-BROWSER-001.md",
         extension: "md",
@@ -604,6 +606,17 @@ test("run-plan generation saves only the returned Markdown", async ({
         digest: "b".repeat(64),
         status: "approved",
         updatedAt: "2026-09-06T11:00:00.000Z",
+      },
+      {
+        id: "REQ-BROWSER-002",
+        title: "Selected browser requirement",
+        kind: "requirement",
+        path: "requirements/REQ-BROWSER-002.md",
+        extension: "md",
+        revision: 2,
+        digest: "d".repeat(64),
+        status: "approved",
+        updatedAt: "2026-09-06T11:30:00.000Z",
       },
       {
         id: "SP-BROWSER-001",
@@ -626,7 +639,7 @@ test("run-plan generation saves only the returned Markdown", async ({
         digest: "e".repeat(64),
         status: "rejected",
         updatedAt: "2026-09-06T09:00:00.000Z",
-        relatedRequirementId: "REQ-BROWSER-001",
+        relatedRequirementId: "REQ-BROWSER-002",
         phaseCount: 1,
         taskCount: 1,
       },
@@ -646,13 +659,37 @@ test("run-plan generation saves only the returned Markdown", async ({
     blockers: [],
     validationErrors: [],
   };
-  await page.route("**/api/snapshot", async (route) =>
-    route.fulfill({
+  await page.route("**/api/snapshot", async (route) => {
+    const savedRunPlan = savedDrafts.length
+      ? [
+          {
+            id: "RP-BROWSER-001",
+            title: "Generated browser plan",
+            kind: "run_plan",
+            path: "run-plans/RP-BROWSER-001.md",
+            extension: "md",
+            revision: 1,
+            digest: "f".repeat(64),
+            status: "draft",
+            updatedAt: "2026-09-06T12:30:00.000Z",
+            relatedRequirementId: "REQ-BROWSER-002",
+            phaseCount: 1,
+            taskCount: 1,
+          },
+        ]
+      : [];
+    await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify(snapshot),
-    }),
-  );
+      body: JSON.stringify({
+        ...snapshot,
+        generatedAt: savedDrafts.length
+          ? "2026-09-06T12:30:00.000Z"
+          : snapshot.generatedAt,
+        artifacts: [...snapshot.artifacts, ...savedRunPlan],
+      }),
+    });
+  });
   await page.route("**/api/capabilities", async (route) =>
     route.fulfill({
       status: 200,
@@ -671,8 +708,9 @@ test("run-plan generation saves only the returned Markdown", async ({
       body: JSON.stringify({ content: "# Browser requirement" }),
     }),
   );
-  await page.route("**/api/prompts/preview", async (route) =>
-    route.fulfill({
+  await page.route("**/api/prompts/preview", async (route) => {
+    previewRequests.push(JSON.parse(route.request().postData() ?? "{}"));
+    await route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
@@ -683,8 +721,8 @@ test("run-plan generation saves only the returned Markdown", async ({
         redactionApplied: false,
         prompt: "Generate the plan.",
       }),
-    }),
-  );
+    });
+  });
   await page.route("**/api/prompt-tasks", async (route) => {
     if (route.request().method() === "GET") {
       await route.fulfill({
@@ -708,6 +746,7 @@ test("run-plan generation saves only the returned Markdown", async ({
       });
       return;
     }
+    taskRequests.push(JSON.parse(route.request().postData() ?? "{}"));
     await new Promise((resolve) => setTimeout(resolve, 200));
     await route.fulfill({
       status: 200,
@@ -775,17 +814,27 @@ test("run-plan generation saves only the returned Markdown", async ({
   });
   await page.route("**/api/run-plans/drafts", async (route) => {
     savedDrafts.push(JSON.parse(route.request().postData() ?? "{}"));
+    await new Promise((resolve) => setTimeout(resolve, 200));
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ id: "RP-BROWSER-001" }),
+      body: JSON.stringify({
+        id: "RP-BROWSER-001",
+        path: "run-plans/RP-BROWSER-001.md",
+      }),
     });
   });
   await page.goto("/");
-  await page.getByRole("button", { name: "Run Plans", exact: true }).click();
+  await page.getByRole("button", { name: "Requirements", exact: true }).click();
+  await page
+    .getByRole("button", { name: /Selected browser requirement/ })
+    .click();
   await expect(page.getByText("Recent run-plan tasks")).toBeVisible();
   await expect(page.getByText("TASK-FAKE-HISTORIC")).toBeVisible();
   await page.getByRole("button", { name: "Create run plan" }).click();
+  await expect(
+    page.getByText("REQ-BROWSER-002", { exact: true }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Start standard prompt" }).click();
   await expect(page.getByRole("button", { name: "Starting…" })).toBeVisible();
   await expect(page.getByText("TASK-FAKE-BROWSER")).toBeVisible();
@@ -798,11 +847,33 @@ test("run-plan generation saves only the returned Markdown", async ({
   );
   await page.getByLabel("Revision request").selectOption("RP-BROWSER-OLD");
   await page.getByRole("button", { name: "Validate and save draft" }).click();
-  await expect(page.getByText("Saved RP-BROWSER-001")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Validating and saving…" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Saved run-plans/RP-BROWSER-001.md"),
+  ).toBeVisible();
   expect(savedDrafts).toHaveLength(1);
   expect(savedDrafts[0].markdown).toContain("Generated browser plan");
   expect(savedDrafts[0]).not.toHaveProperty("sidecar");
+  expect(savedDrafts[0].requirementId).toBe("REQ-BROWSER-002");
   expect(savedDrafts[0].supersedesRunPlanId).toBe("RP-BROWSER-OLD");
+  expect(previewRequests[0].artifactIds).toEqual(["REQ-BROWSER-002"]);
+  expect(taskRequests[0].artifactIds).toEqual(["REQ-BROWSER-002"]);
+  await expect(
+    page.getByRole("button", { name: "View run plan RP-BROWSER-001" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Planning", exact: true }).click();
+  await expect(
+    page.getByText("1 approved requirement awaiting a run plan"),
+  ).toBeVisible();
+  const planningQueue = page.locator(".package-review");
+  await expect(
+    planningQueue.getByText("First approved requirement"),
+  ).toBeVisible();
+  await expect(
+    planningQueue.getByText("Selected browser requirement"),
+  ).toHaveCount(0);
 });
 
 test("work-package sequencing applies a validated model proposal", async ({

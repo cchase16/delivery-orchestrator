@@ -859,6 +859,7 @@ function PageContent({
         initialArtifactId={focusedArtifactId}
         onRefresh={onRefresh}
         onDecision={onDecision}
+        onOpenArtifact={onOpenArtifact}
       />
     );
   if (page === "Planning") return <PlanningPage snapshot={snapshot} />;
@@ -872,6 +873,7 @@ function PageContent({
         initialArtifactId={focusedArtifactId}
         onRefresh={onRefresh}
         onDecision={onDecision}
+        onOpenArtifact={onOpenArtifact}
       />
     );
   if (page === "Work Packages")
@@ -1240,8 +1242,15 @@ function PlanningPage({ snapshot }: { snapshot: Snapshot }) {
     (artifact) =>
       artifact.kind === "run_plan" && artifact.status === "approved",
   );
+  const linkedRunPlans = snapshot.artifacts.filter(
+    (artifact) =>
+      artifact.kind === "run_plan" &&
+      !["rejected", "invalid", "missing", "superseded"].includes(
+        artifact.status,
+      ),
+  );
   const requirementIdsWithPlans = new Set(
-    approvedRunPlans
+    linkedRunPlans
       .map((plan) => plan.relatedRequirementId)
       .filter((id): id is string => Boolean(id)),
   );
@@ -1346,6 +1355,7 @@ function ArtifactPage({
   initialArtifactId,
   onRefresh,
   onDecision,
+  onOpenArtifact,
 }: {
   title: string;
   description: string;
@@ -1357,6 +1367,7 @@ function ArtifactPage({
     artifact: ArtifactSummary,
     decision: "approved" | "rejected",
   ) => void;
+  onOpenArtifact: (artifactId: string, targetPage: Page) => void;
 }) {
   const artifacts = snapshot.artifacts.filter((item) => item.kind === kind);
   const [statusFilter, setStatusFilter] = useState("all");
@@ -1383,7 +1394,10 @@ function ArtifactPage({
       );
     });
   }, [initialArtifactId, kind, snapshot.generatedAt]);
+  const selectedRequirement =
+    kind === "requirement" && selected?.status === "approved" ? selected : null;
   const [promptPreview, setPromptPreview] = useState<{
+    requirementId: string;
     model: string;
     promptMode: string;
     reasoningEffort: string;
@@ -1393,6 +1407,7 @@ function ArtifactPage({
   } | null>(null);
   const [promptTask, setPromptTask] = useState<{
     taskId: string;
+    requirementId: string;
     adapter: string;
     actualModel: string;
     actualReasoningEffort: string;
@@ -1406,11 +1421,13 @@ function ArtifactPage({
   const [promptError, setPromptError] = useState<string | null>(null);
   const [draftMarkdown, setDraftMarkdown] = useState("");
   const [draftSaved, setDraftSaved] = useState<string | null>(null);
+  const [draftSaveError, setDraftSaveError] = useState<string | null>(null);
+  const [isSavingRunPlan, setIsSavingRunPlan] = useState(false);
   const [supersedesRunPlanId, setSupersedesRunPlanId] = useState("");
   const [promptTasks, setPromptTasks] = useState<PromptTaskMonitor[]>([]);
   useEffect(() => {
     if (
-      kind !== "run_plan" ||
+      !["requirement", "run_plan"].includes(kind) ||
       new URLSearchParams(window.location.search).has("demo")
     )
       return;
@@ -1437,7 +1454,7 @@ function ArtifactPage({
   }, [kind]);
   useEffect(() => {
     if (
-      kind !== "run_plan" ||
+      kind !== "requirement" ||
       !promptTask?.taskId ||
       new URLSearchParams(window.location.search).has("demo")
     )
@@ -1515,12 +1532,10 @@ function ArtifactPage({
     };
   }, [kind, promptTask?.taskId]);
   async function prepareRunPlanPrompt() {
-    const requirement = snapshot.artifacts.find(
-      (item) => item.kind === "requirement" && item.status === "approved",
-    );
+    const requirement = selectedRequirement;
     if (!requirement) {
       setPromptError(
-        "Approve a requirement revision before creating its run plan.",
+        "Select an approved requirement revision before creating its run plan.",
       );
       return;
     }
@@ -1545,6 +1560,7 @@ function ArtifactPage({
       if (!response.ok)
         throw new Error(result.error ?? "Unable to prepare prompt.");
       setPromptPreview({
+        requirementId: requirement.id,
         model: result.model ?? "gpt-5.6-sol",
         promptMode: result.promptMode ?? "standard",
         reasoningEffort: result.reasoningEffort ?? "medium",
@@ -1562,9 +1578,7 @@ function ArtifactPage({
     }
   }
   async function startRunPlanGeneration() {
-    const requirement = snapshot.artifacts.find(
-      (item) => item.kind === "requirement" && item.status === "approved",
-    );
+    const requirement = selectedRequirement;
     const profile = snapshot.promptProfiles.find(
       (item) => item.taskType === "run_plan_generation",
     );
@@ -1604,6 +1618,7 @@ function ArtifactPage({
         throw new Error(result.error ?? "Unable to start generation.");
       setPromptTask({
         taskId: result.taskId ?? "—",
+        requirementId: requirement.id,
         adapter: result.adapter ?? profile.adapter ?? "fake",
         actualModel: result.actualModel ?? profile.model,
         actualReasoningEffort:
@@ -1645,12 +1660,20 @@ function ArtifactPage({
   }
   async function saveGeneratedRunPlan() {
     const requirement = snapshot.artifacts.find(
-      (item) => item.kind === "requirement" && item.status === "approved",
+      (item) =>
+        item.id === promptTask?.requirementId &&
+        item.kind === "requirement" &&
+        item.status === "approved",
     );
     if (!requirement) {
-      setPromptError("An approved requirement is required to save a run plan.");
+      setDraftSaveError(
+        "An approved requirement is required to save a run plan.",
+      );
       return;
     }
+    setIsSavingRunPlan(true);
+    setDraftSaveError(null);
+    setDraftSaved(null);
     try {
       const response = await fetch("/api/run-plans/drafts", {
         method: "POST",
@@ -1663,23 +1686,27 @@ function ArtifactPage({
       });
       const result = (await response.json()) as {
         id?: string;
+        path?: string;
         error?: string;
       };
       if (!response.ok)
         throw new Error(result.error ?? "Unable to save run-plan draft.");
-      setDraftSaved(result.id ?? "draft");
+      setDraftSaved(result.path ?? result.id ?? "draft");
+      setDraftSaveError(null);
       setPromptError(null);
       await onRefresh();
     } catch (cause) {
-      setPromptError(
+      setDraftSaveError(
         cause instanceof Error
           ? cause.message
           : "Unable to validate and save the run-plan Markdown.",
       );
+    } finally {
+      setIsSavingRunPlan(false);
     }
   }
-  const approvedRequirement = snapshot.artifacts.find(
-    (item) => item.kind === "requirement" && item.status === "approved",
+  const promptRequirement = snapshot.artifacts.find(
+    (item) => item.id === promptTask?.requirementId,
   );
   const runPlanPromptTasks = promptTasks.filter(
     (task) => task.taskType === "run_plan_generation",
@@ -1698,10 +1725,16 @@ function ArtifactPage({
         title={title}
         description={description}
         action={
-          kind === "run_plan" ? (
+          kind === "requirement" ? (
             <button
               className="primary-button"
               onClick={() => void prepareRunPlanPrompt()}
+              disabled={!selectedRequirement}
+              title={
+                selectedRequirement
+                  ? `Create a run plan for ${selectedRequirement.id}`
+                  : "Select an approved requirement first"
+              }
             >
               <Zap size={16} />
               Create run plan
@@ -1769,8 +1802,10 @@ function ArtifactPage({
         <ArtifactDetail
           artifact={selected}
           alternatives={artifacts}
+          relatedArtifacts={snapshot.artifacts}
           approvals={snapshot.approvals}
           onDecision={onDecision}
+          onOpenArtifact={onOpenArtifact}
         />
       </div>
       {promptError && (
@@ -1787,237 +1822,264 @@ function ArtifactPage({
         currentTaskId={promptTask?.taskId}
         onInterrupt={(taskId) => void interruptPromptTask(taskId)}
       />
-      {promptPreview && (
-        <section className="panel prompt-preview">
-          <div className="panel-title">
-            <div>
-              <span className="section-kicker">PROMPT PREVIEW</span>
-              <h2>Run-plan generation packet</h2>
+      {promptPreview &&
+        promptPreview.requirementId === selectedRequirement?.id && (
+          <section className="panel prompt-preview">
+            <div className="panel-title">
+              <div>
+                <span className="section-kicker">PROMPT PREVIEW</span>
+                <h2>Run-plan generation packet</h2>
+              </div>
+              <StatusBadge status="ready" />
             </div>
-            <StatusBadge status="ready" />
-          </div>
-          <div className="detail-meta">
-            <span>
-              <Zap size={14} />
-              {promptPreview.model}
-            </span>
-            <span>
-              <CircleDot size={14} />
-              {promptPreview.promptMode} prompt
-            </span>
-            <span>
-              <SlidersHorizontal size={14} />
-              {promptPreview.reasoningEffort} reasoning
-            </span>
-            <span>
-              <ShieldCheck size={14} />
-              No goal created
-            </span>
-            {promptPreview.redactionApplied && (
+            <div className="detail-meta">
+              <span title={selectedRequirement?.title}>
+                <FileText size={14} />
+                {promptPreview.requirementId}
+              </span>
+              <span>
+                <Zap size={14} />
+                {promptPreview.model}
+              </span>
+              <span>
+                <CircleDot size={14} />
+                {promptPreview.promptMode} prompt
+              </span>
+              <span>
+                <SlidersHorizontal size={14} />
+                {promptPreview.reasoningEffort} reasoning
+              </span>
               <span>
                 <ShieldCheck size={14} />
-                Sensitive values redacted
+                No goal created
               </span>
-            )}
-          </div>
-          <div className="prompt-controls">
-            <label>
-              Effective model
-              <select
-                value={promptPreview.model}
-                onChange={(event) =>
-                  setPromptPreview({
-                    ...promptPreview,
-                    model: event.target.value,
-                  })
-                }
-              >
-                <option>gpt-5.6-sol</option>
-                <option>gpt-5.6-luna</option>
-                <option>gpt-5.6-terra</option>
-              </select>
-            </label>
-            <label>
-              Effective reasoning
-              <select
-                value={promptPreview.reasoningEffort}
-                onChange={(event) =>
-                  setPromptPreview({
-                    ...promptPreview,
-                    reasoningEffort: event.target.value,
-                  })
-                }
-              >
-                <option>low</option>
-                <option>medium</option>
-                <option>high</option>
-                <option>xhigh</option>
-              </select>
-            </label>
-          </div>
-          <div className="detail-actions">
-            <button
-              className="primary-button"
-              onClick={() => void startRunPlanGeneration()}
-              disabled={isStartingRunPlan || Boolean(activePromptTask)}
-              aria-busy={isStartingRunPlan}
-            >
-              {isStartingRunPlan || activePromptTask ? (
-                <Loader2 className="spin" size={15} />
-              ) : (
-                <Play size={15} />
-              )}
-              {isStartingRunPlan
-                ? "Starting…"
-                : activePromptTask
-                  ? "Generation already running"
-                  : "Start standard prompt"}
-            </button>
-            <span className="muted-label">
-              Template {promptPreview.templateVersion}
-            </span>
-          </div>
-          {(isStartingRunPlan || promptTask || promptError) && (
-            <div
-              className="progress-overlay prompt-task-progress"
-              role="status"
-              aria-live="polite"
-            >
-              <div className="panel-title">
-                <div>
-                  <span className="section-kicker">CODEX TASK</span>
-                  <h2>
-                    {isStartingRunPlan
-                      ? "Starting App Server and task…"
-                      : (promptTask?.taskId ?? "Generation could not start")}
-                  </h2>
-                </div>
-                {isStartingRunPlan ||
-                ["starting", "inprogress"].includes(
-                  promptTaskSnapshot?.status.toLowerCase() ?? "",
-                ) ? (
-                  <Loader2 className="spin" size={18} />
-                ) : (
-                  <StatusBadge
-                    status={
-                      promptTaskSnapshot?.status ??
-                      (promptError ? "error" : "started")
-                    }
-                  />
-                )}
-              </div>
-              {promptTask && (
-                <small className="muted-label prompt-task-meta">
-                  {promptTask.adapter} · {promptTask.actualModel} ·{" "}
-                  {promptTask.actualReasoningEffort} reasoning ·{" "}
-                  {promptTaskSnapshot?.events.length ?? 0} events received
-                </small>
-              )}
-              {promptTaskSnapshot?.output && (
-                <pre className="task-output">
-                  {promptTaskSnapshot.output.slice(-4000)}
-                </pre>
-              )}
-              {promptTask &&
-                ["starting", "queued", "running", "inprogress"].includes(
-                  promptTaskSnapshot?.status.toLowerCase() ?? "starting",
-                ) && (
-                  <div className="prompt-task-row-footer">
-                    <span>Output updates automatically.</span>
-                    <button
-                      className="danger-button"
-                      onClick={() =>
-                        void interruptPromptTask(promptTask.taskId)
-                      }
-                    >
-                      <XCircle size={14} />
-                      Interrupt
-                    </button>
-                  </div>
-                )}
-              {promptError && (
-                <p className="prompt-task-error">{promptError}</p>
+              {promptPreview.redactionApplied && (
+                <span>
+                  <ShieldCheck size={14} />
+                  Sensitive values redacted
+                </span>
               )}
             </div>
-          )}
-          <pre>{promptPreview.prompt}</pre>
-          {promptTask &&
-            !new URLSearchParams(window.location.search).has("demo") && (
-              <div className="draft-output">
-                <div>
-                  <span className="section-kicker">CANONICAL OUTPUT</span>
-                  <h3>Save the reviewed model output</h3>
-                  <p>
-                    Review the complete Markdown plan. The dashboard validates
-                    its template structure, derives the JSON sidecar, and writes
-                    a new draft revision only after validation succeeds.
-                  </p>
-                </div>
-                <label>
-                  Revision request
-                  <select
-                    value={supersedesRunPlanId}
-                    onChange={(event) =>
-                      setSupersedesRunPlanId(event.target.value)
-                    }
-                  >
-                    <option value="">Create a new run-plan revision</option>
-                    {snapshot.artifacts
-                      .filter(
-                        (candidate) =>
-                          candidate.kind === "run_plan" &&
-                          candidate.relatedRequirementId ===
-                            approvedRequirement?.id,
-                      )
-                      .map((candidate) => (
-                        <option key={candidate.id} value={candidate.id}>
-                          Supersede {candidate.id} · rev {candidate.revision}
-                        </option>
-                      ))}
-                  </select>
-                </label>
-                <label>
-                  Run-plan Markdown
-                  <textarea
-                    value={draftMarkdown}
-                    onChange={(event) => setDraftMarkdown(event.target.value)}
-                    placeholder="Paste the complete canonical Markdown run plan here."
-                    rows={10}
-                  />
-                </label>
-                <div className="detail-actions">
-                  <button
-                    className="primary-button"
-                    onClick={() => void saveGeneratedRunPlan()}
-                    disabled={!draftMarkdown.trim()}
-                  >
-                    <FileCheck2 size={15} />
-                    Validate and save draft
-                  </button>
-                  {draftSaved && (
-                    <span className="muted-label">Saved {draftSaved}</span>
+            <div className="prompt-controls">
+              <label>
+                Effective model
+                <select
+                  value={promptPreview.model}
+                  onChange={(event) =>
+                    setPromptPreview({
+                      ...promptPreview,
+                      model: event.target.value,
+                    })
+                  }
+                >
+                  <option>gpt-5.6-sol</option>
+                  <option>gpt-5.6-luna</option>
+                  <option>gpt-5.6-terra</option>
+                </select>
+              </label>
+              <label>
+                Effective reasoning
+                <select
+                  value={promptPreview.reasoningEffort}
+                  onChange={(event) =>
+                    setPromptPreview({
+                      ...promptPreview,
+                      reasoningEffort: event.target.value,
+                    })
+                  }
+                >
+                  <option>low</option>
+                  <option>medium</option>
+                  <option>high</option>
+                  <option>xhigh</option>
+                </select>
+              </label>
+            </div>
+            <div className="detail-actions">
+              <button
+                className="primary-button"
+                onClick={() => void startRunPlanGeneration()}
+                disabled={isStartingRunPlan || Boolean(activePromptTask)}
+                aria-busy={isStartingRunPlan}
+              >
+                {isStartingRunPlan || activePromptTask ? (
+                  <Loader2 className="spin" size={15} />
+                ) : (
+                  <Play size={15} />
+                )}
+                {isStartingRunPlan
+                  ? "Starting…"
+                  : activePromptTask
+                    ? "Generation already running"
+                    : "Start standard prompt"}
+              </button>
+              <span className="muted-label">
+                Template {promptPreview.templateVersion}
+              </span>
+            </div>
+            {(isStartingRunPlan || promptTask || promptError) && (
+              <div
+                className="progress-overlay prompt-task-progress"
+                role="status"
+                aria-live="polite"
+              >
+                <div className="panel-title">
+                  <div>
+                    <span className="section-kicker">CODEX TASK</span>
+                    <h2>
+                      {isStartingRunPlan
+                        ? "Starting App Server and task…"
+                        : (promptTask?.taskId ?? "Generation could not start")}
+                    </h2>
+                  </div>
+                  {isStartingRunPlan ||
+                  ["starting", "inprogress"].includes(
+                    promptTaskSnapshot?.status.toLowerCase() ?? "",
+                  ) ? (
+                    <Loader2 className="spin" size={18} />
+                  ) : (
+                    <StatusBadge
+                      status={
+                        promptTaskSnapshot?.status ??
+                        (promptError ? "error" : "started")
+                      }
+                    />
                   )}
                 </div>
+                {promptTask && (
+                  <small className="muted-label prompt-task-meta">
+                    {promptTask.adapter} · {promptTask.actualModel} ·{" "}
+                    {promptTask.actualReasoningEffort} reasoning ·{" "}
+                    {promptTaskSnapshot?.events.length ?? 0} events received
+                  </small>
+                )}
+                {promptTaskSnapshot?.output && (
+                  <pre className="task-output">
+                    {promptTaskSnapshot.output.slice(-4000)}
+                  </pre>
+                )}
+                {promptTask &&
+                  ["starting", "queued", "running", "inprogress"].includes(
+                    promptTaskSnapshot?.status.toLowerCase() ?? "starting",
+                  ) && (
+                    <div className="prompt-task-row-footer">
+                      <span>Output updates automatically.</span>
+                      <button
+                        className="danger-button"
+                        onClick={() =>
+                          void interruptPromptTask(promptTask.taskId)
+                        }
+                      >
+                        <XCircle size={14} />
+                        Interrupt
+                      </button>
+                    </div>
+                  )}
+                {promptError && (
+                  <p className="prompt-task-error">{promptError}</p>
+                )}
               </div>
             )}
-        </section>
-      )}
+            <pre>{promptPreview.prompt}</pre>
+            {promptTask &&
+              !new URLSearchParams(window.location.search).has("demo") && (
+                <div className="draft-output">
+                  <div>
+                    <span className="section-kicker">CANONICAL OUTPUT</span>
+                    <h3>Save the reviewed model output</h3>
+                    <p>
+                      Review the complete Markdown plan. The dashboard validates
+                      its template structure, derives the JSON sidecar, and
+                      writes a new draft revision only after validation
+                      succeeds.
+                    </p>
+                  </div>
+                  <label>
+                    Revision request
+                    <select
+                      value={supersedesRunPlanId}
+                      onChange={(event) =>
+                        setSupersedesRunPlanId(event.target.value)
+                      }
+                    >
+                      <option value="">Create a new run-plan revision</option>
+                      {snapshot.artifacts
+                        .filter(
+                          (candidate) =>
+                            candidate.kind === "run_plan" &&
+                            candidate.relatedRequirementId ===
+                              promptRequirement?.id,
+                        )
+                        .map((candidate) => (
+                          <option key={candidate.id} value={candidate.id}>
+                            Supersede {candidate.id} · rev {candidate.revision}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                  <label>
+                    Run-plan Markdown
+                    <textarea
+                      value={draftMarkdown}
+                      onChange={(event) => {
+                        setDraftMarkdown(event.target.value);
+                        setDraftSaved(null);
+                        setDraftSaveError(null);
+                      }}
+                      placeholder="Paste the complete canonical Markdown run plan here."
+                      rows={10}
+                    />
+                  </label>
+                  <div className="detail-actions">
+                    <button
+                      className="primary-button"
+                      onClick={() => void saveGeneratedRunPlan()}
+                      disabled={!draftMarkdown.trim() || isSavingRunPlan}
+                      aria-busy={isSavingRunPlan}
+                    >
+                      {isSavingRunPlan ? (
+                        <Loader2 className="spin" size={15} />
+                      ) : (
+                        <FileCheck2 size={15} />
+                      )}
+                      {isSavingRunPlan
+                        ? "Validating and saving…"
+                        : "Validate and save draft"}
+                    </button>
+                    {draftSaved && (
+                      <span className="muted-label">Saved {draftSaved}</span>
+                    )}
+                  </div>
+                  {draftSaveError && (
+                    <div className="draft-save-error" role="alert">
+                      <AlertTriangle size={15} />
+                      <span>{draftSaveError}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+          </section>
+        )}
     </>
   );
 }
 function ArtifactDetail({
   artifact,
   alternatives,
+  relatedArtifacts,
   approvals,
   onDecision,
+  onOpenArtifact,
 }: {
   artifact: ArtifactSummary | null;
   alternatives: ArtifactSummary[];
+  relatedArtifacts: ArtifactSummary[];
   approvals: ApprovalSummary[];
   onDecision: (
     artifact: ArtifactSummary,
     decision: "approved" | "rejected",
   ) => void;
+  onOpenArtifact: (artifactId: string, targetPage: Page) => void;
 }) {
   const [content, setContent] = useState<string | null>(null);
   const [contentLoading, setContentLoading] = useState(false);
@@ -2086,6 +2148,15 @@ function ArtifactDetail({
   const decisionHistory = approvals.filter(
     (approval) => approval.artifactId === artifact.id,
   );
+  const linkedRunPlans = relatedArtifacts.filter(
+    (candidate) =>
+      artifact.kind === "requirement" &&
+      candidate.kind === "run_plan" &&
+      candidate.relatedRequirementId === artifact.id &&
+      !["rejected", "invalid", "missing", "superseded"].includes(
+        candidate.status,
+      ),
+  );
   return (
     <section className="panel artifact-detail">
       <div className="detail-header">
@@ -2151,6 +2222,27 @@ function ArtifactDetail({
         )}
       </div>
       <div className="detail-actions">
+        {linkedRunPlans.map((runPlan) => (
+          <button
+            className="secondary-button"
+            key={runPlan.id}
+            onClick={() => onOpenArtifact(runPlan.id, "Run Plans")}
+          >
+            <ListChecks size={15} />
+            View run plan {runPlan.id}
+          </button>
+        ))}
+        {artifact.kind === "run_plan" && artifact.relatedRequirementId && (
+          <button
+            className="secondary-button"
+            onClick={() =>
+              onOpenArtifact(artifact.relatedRequirementId!, "Requirements")
+            }
+          >
+            <FileText size={15} />
+            View source requirement
+          </button>
+        )}
         <button
           className="secondary-button"
           onClick={() =>

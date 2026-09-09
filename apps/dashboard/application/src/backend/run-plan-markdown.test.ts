@@ -112,6 +112,17 @@ describe("deriveRunPlanSidecar", () => {
     ).toThrow("must include at least one allowed path");
   });
 
+  it("preserves semicolons inside scalar task fields", () => {
+    const plan = validPlan.replace(
+      "Implement the menu service.",
+      "Inspect the existing service; implement the menu without changing its public API.",
+    );
+    expect(deriveRunPlanSidecar(plan).phases[0].tasks[0]).toMatchObject({
+      task_id: "TASK-01-01",
+      title: "Add the menu service",
+    });
+  });
+
   it("rejects duplicate stable identifiers", () => {
     const duplicate = validPlan.replace(
       "## Acceptance criteria traceability",
