@@ -151,15 +151,18 @@ const executionProfile: PromptProfile = {
   label: "Run-plan execution",
   model: "gpt-5.6-luna",
   reasoningEffort: "high",
-  promptMode: "goal",
+  promptMode: "standard",
   adapter: "fake",
 };
 
 describe("PromptBuilder and execution adapters", () => {
-  it("negotiates the experimental App Server API required by native goals", () => {
+  it("uses stable App Server capabilities for standard turns", () => {
     expect(codexAppServerInitializeParams()).toMatchObject({
-      capabilities: { experimentalApi: true },
+      capabilities: {},
     });
+    expect(codexAppServerInitializeParams().capabilities).not.toHaveProperty(
+      "experimentalApi",
+    );
   });
 
   it("resolves explicit overrides without falling back to unsupported settings", () => {
@@ -259,7 +262,7 @@ describe("PromptBuilder and execution adapters", () => {
     }).toMatchSnapshot();
   });
 
-  it("assembles the full approved run plan as a goal prompt", async () => {
+  it("assembles the full approved run plan as a phase-scoped prompt", async () => {
     const { config, repository } = await fixture();
     const snapshot = await repository.snapshot();
     const requirement = snapshot.artifacts.find(
@@ -300,11 +303,13 @@ describe("PromptBuilder and execution adapters", () => {
         firstPhaseTitle: "Foundation",
         firstTaskId: "TASK-01",
         firstTaskTitle: "Add the menu service",
+        phaseOrdinal: 1,
+        phaseCount: 3,
       },
     );
     expect(packet).toMatchObject({
       taskType: "run_plan_execution",
-      promptMode: "goal",
+      promptMode: "standard",
       model: "gpt-5.6-luna",
       reasoningEffort: "high",
     });
@@ -312,26 +317,28 @@ describe("PromptBuilder and execution adapters", () => {
     expect(packet.prompt).toContain(
       "Treat the approved implementation run plan as immutable",
     );
-    expect(packet.goal).toContain(
-      "starting with PH-01 (Foundation), TASK-01 (Add the menu service)",
+    expect(packet.prompt).toContain(
+      "Implement only phase 1 of 3: PH-01 (Foundation), starting with TASK-01 (Add the menu service)",
     );
-    expect(packet.goal).toContain("progress.json");
+    expect(packet.prompt).toContain("progress.json");
     expect(packet.prompt.indexOf("System context:")).toBeLessThan(
-      packet.prompt.indexOf("Goal:"),
+      packet.prompt.indexOf("Current phase assignment:"),
     );
     expect(packet.prompt).toContain(
       "Do not begin another run plan. The dashboard will start the next sequenced plan",
     );
+    expect(packet.prompt).toContain("Do not begin a later phase");
+    expect(packet.prompt).toContain("A non-critical issue does not prevent");
     expect(packet.prompt).not.toContain("sk-test-secret-value");
   });
 
   it("covers fake adapter completion, blocked, cancellation, and startup failure", async () => {
     const packet: PromptPacket = {
       taskType: "run_plan_execution",
-      promptMode: "goal",
+      promptMode: "standard",
       model: "gpt-5.6-luna",
       reasoningEffort: "high",
-      templateVersion: "run-plan-execution.v2",
+      templateVersion: "run-plan-execution.v3",
       redactionApplied: false,
       inputArtifacts: [],
       prompt: "Execute the approved plan.",
@@ -345,6 +352,8 @@ describe("PromptBuilder and execution adapters", () => {
       status: "blocked",
       output: "Input is required.",
     });
+    const continued = await blocked.continueTask!(task.taskId, packet);
+    expect(continued.taskId).toBe(task.taskId);
     await blocked.interrupt(task.taskId);
     await expect(blocked.read(task.taskId)).resolves.toMatchObject({
       status: "cancelled",

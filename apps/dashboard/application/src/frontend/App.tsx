@@ -219,7 +219,7 @@ const demoSnapshot: Snapshot = {
       label: "Run-plan execution",
       model: "gpt-5.6-luna",
       reasoningEffort: "high",
-      promptMode: "goal",
+      promptMode: "standard",
     },
   ],
   blockers: [],
@@ -3276,7 +3276,7 @@ function ActiveRunsPage({
             </div>
             <div>
               <span className="muted-label">Execution mode</span>
-              <strong>Goal prompt</strong>
+              <strong>Phase prompts</strong>
             </div>
             <div>
               <span className="muted-label">Task adapter</span>

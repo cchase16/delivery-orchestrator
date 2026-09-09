@@ -3,7 +3,10 @@ import path from "node:path";
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
 import { loadConfig } from "./config.js";
-import { DeliveryRepository } from "./repository.js";
+import {
+  DeliveryRepository,
+  type PreparedExecutionPhase,
+} from "./repository.js";
 import { RuntimeState } from "./state.js";
 import type {
   ActiveRun,
@@ -171,6 +174,25 @@ async function dispatchNextImplementationTask(
   phaseLabel: string;
   taskLabel: string;
 }> {
+  const execution = await repository.prepareExecutionProgress({
+    runId: run.runId,
+    workPackageId: run.workPackageId,
+    runPlanId,
+  });
+  return dispatchImplementationPhase(run, runPlanId, execution);
+}
+
+async function dispatchImplementationPhase(
+  run: ActiveRun,
+  runPlanId: string,
+  execution: PreparedExecutionPhase,
+  existingTaskId?: string,
+): Promise<{
+  taskId: string;
+  adapter: string;
+  phaseLabel: string;
+  taskLabel: string;
+}> {
   const profile = state
     .getPromptProfiles()
     .find((candidate) => candidate.taskType === "run_plan_execution");
@@ -178,11 +200,6 @@ async function dispatchNextImplementationTask(
     throw new Error("Run-plan execution profile is not configured.");
   if (!run.worktreePath || !run.baseCommit || !run.branch)
     throw new Error("Run did not receive an isolated product worktree.");
-  const execution = await repository.prepareExecutionProgress({
-    runId: run.runId,
-    workPackageId: run.workPackageId,
-    runPlanId,
-  });
   const packet = await promptBuilder.preview(
     "run_plan_execution",
     [runPlanId],
@@ -200,6 +217,8 @@ async function dispatchNextImplementationTask(
       firstPhaseTitle: execution.firstPhaseTitle,
       firstTaskId: execution.firstTaskId,
       firstTaskTitle: execution.firstTaskTitle,
+      phaseOrdinal: execution.phaseOrdinal,
+      phaseCount: execution.phaseCount,
     },
   );
   packet.executionContext = {
@@ -215,7 +234,16 @@ async function dispatchNextImplementationTask(
   if (!adapter) throw new Error(`Unknown adapter: ${adapterId}`);
   const capability = await adapter.probe();
   if (!capability.available) throw new Error(capability.detail);
-  const task = await adapter.start(packet);
+  const existingTask = existingTaskId
+    ? await adapter.read?.(existingTaskId)
+    : undefined;
+  const canContinue =
+    existingTaskId &&
+    existingTask &&
+    existingTask.status.toLowerCase() !== "unknown";
+  const task = canContinue
+    ? await adapter.continueTask(existingTaskId, packet)
+    : await adapter.start(packet);
   await repository.saveExecutionProgress({
     run_id: execution.progress.run_id,
     work_package_id: execution.progress.work_package_id,
@@ -228,11 +256,15 @@ async function dispatchNextImplementationTask(
     tasks: execution.progress.tasks,
   });
   state.recordAction(
-    "implementation_task_started",
+    "implementation_phase_started",
     {
       runId: run.runId,
       taskId: task.taskId,
       runPlanId,
+      phaseId: execution.firstPhaseId,
+      phaseOrdinal: execution.phaseOrdinal,
+      phaseCount: execution.phaseCount,
+      continuedTask: Boolean(canContinue),
       promptMode: packet.promptMode,
       executionContext: packet.executionContext,
       requested: {
@@ -242,7 +274,7 @@ async function dispatchNextImplementationTask(
       },
       actual: task,
     },
-    `implementation-task:${run.runId}:${runPlanId}`,
+    `implementation-phase:${run.runId}:${runPlanId}:${execution.firstPhaseId}`,
   );
   return {
     taskId: task.taskId,
@@ -250,6 +282,33 @@ async function dispatchNextImplementationTask(
     phaseLabel: `${execution.firstPhaseId} · ${execution.firstPhaseTitle}`,
     taskLabel: `${execution.firstTaskId} · ${execution.firstTaskTitle}`,
   };
+}
+
+async function continueNextImplementationPhase(
+  run: ActiveRun,
+  runPlanId: string,
+): Promise<{
+  taskId: string;
+  adapter: string;
+  phaseLabel: string;
+  taskLabel: string;
+} | null> {
+  const execution = await repository.prepareNextExecutionPhase(run.runId);
+  if (!execution) return null;
+  return dispatchImplementationPhase(run, runPlanId, execution, run.taskId);
+}
+
+async function retryCurrentImplementationPhase(
+  run: ActiveRun,
+  runPlanId: string,
+): Promise<{
+  taskId: string;
+  adapter: string;
+  phaseLabel: string;
+  taskLabel: string;
+}> {
+  const execution = await repository.prepareCurrentExecutionPhase(run.runId);
+  return dispatchImplementationPhase(run, runPlanId, execution, run.taskId);
 }
 
 async function packageRunPlanId(
@@ -697,8 +756,7 @@ app.post<{ Body: PromptProfile }>(
       return reply
         .code(400)
         .send({ error: "Adapter is not available in the active dashboard." });
-    const expectedMode =
-      profile.taskType === "run_plan_execution" ? "goal" : "standard";
+    const expectedMode = "standard";
     if (profile.promptMode !== expectedMode)
       return reply.code(400).send({
         error: `${profile.taskType} requires a ${expectedMode} prompt.`,
@@ -1140,7 +1198,7 @@ app.post<{
         Math.max(0, activeRun.sequence - 1),
       );
       if (!currentPlanId) throw new Error("Run package has no retryable plan.");
-      const nextTask = await dispatchNextImplementationTask(
+      const nextTask = await retryCurrentImplementationPhase(
         activeRun,
         currentPlanId,
       );
@@ -1170,6 +1228,44 @@ app.post<{
         taskSnapshot?.status.toLowerCase() ?? "",
       );
       if (taskCompleted) {
+        const currentPlanId = await packageRunPlanId(
+          activeRun,
+          Math.max(0, activeRun.sequence - 1),
+        );
+        if (!currentPlanId)
+          throw new Error("Run package has no resumable plan.");
+        let nextTask;
+        try {
+          nextTask = await continueNextImplementationPhase(
+            activeRun,
+            currentPlanId,
+          );
+        } catch (cause) {
+          if (
+            cause instanceof Error &&
+            cause.message.startsWith(
+              "Current phase functionality is incomplete",
+            )
+          )
+            nextTask = await retryCurrentImplementationPhase(
+              activeRun,
+              currentPlanId,
+            );
+          else throw cause;
+        }
+        if (nextTask)
+          return repository.updateRun(activeRun.runId, {
+            status: "in_progress",
+            acceptedSequence: undefined,
+            currentPhase: nextTask.phaseLabel,
+            currentTask: `${nextTask.taskLabel} · Codex task ${nextTask.taskId}`,
+            taskId: nextTask.taskId,
+            adapter: nextTask.adapter,
+          });
+        if (activeRun.acceptedSequence !== activeRun.sequence)
+          throw new Error(
+            "Resume blocked: the current run plan is complete and awaits validation acceptance.",
+          );
         return await advanceAcceptedRun(activeRun);
       }
     }
@@ -1252,13 +1348,60 @@ const taskMonitor = setInterval(() => {
             `Codex task ${run.taskId} is blocked`,
         });
       else if (["completed", "complete", "succeeded"].includes(normalized)) {
-        const gate = await repository.executionProgressGate(run.runId);
-        repository.updateRun(run.runId, {
-          status: "blocked",
-          currentTask: gate.ready
-            ? "Run plan complete · review diff and record validation evidence"
-            : `Codex task ended before every status was green · ${gate.reasons.join(" ")}`,
-        });
+        const currentPlanId = await packageRunPlanId(
+          currentRun,
+          Math.max(0, currentRun.sequence - 1),
+        );
+        if (!currentPlanId) {
+          repository.updateRun(run.runId, {
+            status: "blocked",
+            currentTask: "Run package has no current implementation plan.",
+          });
+          return;
+        }
+        try {
+          const nextTask = await continueNextImplementationPhase(
+            currentRun,
+            currentPlanId,
+          );
+          const latestRun = repository.getRun(run.runId);
+          if (
+            latestRun?.status !== "in_progress" ||
+            latestRun.taskId !== run.taskId
+          )
+            return;
+          if (nextTask) {
+            repository.updateRun(run.runId, {
+              status: "in_progress",
+              currentPhase: nextTask.phaseLabel,
+              currentTask: `${nextTask.taskLabel} · Codex task ${nextTask.taskId}`,
+              taskId: nextTask.taskId,
+              adapter: nextTask.adapter,
+            });
+            return;
+          }
+          const gate = await repository.executionProgressGate(run.runId);
+          repository.updateRun(run.runId, {
+            status: "blocked",
+            currentTask: gate.ready
+              ? "Run plan complete · review diff and record validation evidence"
+              : `Run plan ended before every status was green · ${gate.reasons.join(" ")}`,
+          });
+        } catch (cause) {
+          const latestRun = repository.getRun(run.runId);
+          if (
+            latestRun?.status !== "in_progress" ||
+            latestRun.taskId !== run.taskId
+          )
+            return;
+          repository.updateRun(run.runId, {
+            status: "blocked",
+            currentTask:
+              cause instanceof Error
+                ? `Phase stopped: ${cause.message}`
+                : "Phase stopped before its functionality was complete.",
+          });
+        }
       }
     } catch {
       /* transient adapter/repository failures remain visible through the next poll */

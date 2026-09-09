@@ -71,7 +71,6 @@ export interface PromptPacket {
     path: string;
     digest: string;
   }>;
-  goal?: string;
   prompt: string;
   executionContext?: {
     cwd: string;

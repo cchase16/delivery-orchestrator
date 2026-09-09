@@ -1148,6 +1148,132 @@ describe("DeliveryRepository", () => {
     ).rejects.toThrow("cyclic dependencies");
   });
 
+  it("activates execution phases sequentially and completes the plan deterministically", async () => {
+    const config = await fixture();
+    const sidecarPath = path.join(
+      config.deliveryRepository,
+      "run-plans",
+      "implementation-plan.sidecar.json",
+    );
+    const sidecar = JSON.parse(await fs.readFile(sidecarPath, "utf8"));
+    sidecar.phases.push({
+      phase_id: "PH-02",
+      title: "Verification",
+      status: "not_started",
+      tasks: [
+        {
+          task_id: "TASK-02",
+          title: "Verify the context menu",
+          status: "not_started",
+          allowed_paths: ["addons/**"],
+        },
+      ],
+    });
+    await fs.writeFile(sidecarPath, JSON.stringify(sidecar, null, 2) + "\n");
+    const state = new RuntimeState(config.runtimeDirectory);
+    states.push(state);
+    config.schemaDirectory = path.resolve(process.cwd(), "../../../schemas");
+    const registry = new SchemaRegistry(config);
+    await registry.load();
+    const repository = new DeliveryRepository(config, state, registry);
+    const snapshot = await repository.snapshot();
+    const requirement = snapshot.artifacts.find(
+      (artifact) => artifact.kind === "requirement",
+    )!;
+    const plan = snapshot.artifacts.find(
+      (artifact) => artifact.kind === "run_plan",
+    )!;
+    await repository.recordDecision({
+      artifactId: requirement.id,
+      kind: "requirement",
+      decision: "approved",
+    });
+    await repository.recordDecision({
+      artifactId: plan.id,
+      kind: "run_plan",
+      decision: "approved",
+    });
+    const first = await repository.prepareExecutionProgress({
+      runId: "RUN-PHASES",
+      workPackageId: "WP-PHASES",
+      runPlanId: plan.id,
+    });
+    expect(first).toMatchObject({
+      firstPhaseId: "PH-01",
+      phaseOrdinal: 1,
+      phaseCount: 2,
+    });
+    await expect(
+      repository.prepareNextExecutionPhase("RUN-PHASES"),
+    ).rejects.toThrow("Current phase functionality is incomplete");
+    await repository.saveExecutionProgress({
+      run_id: first.progress.run_id,
+      work_package_id: first.progress.work_package_id,
+      run_plan_id: first.progress.run_plan_id,
+      run_plan_revision: first.progress.run_plan_revision,
+      status: "in_progress",
+      current_phase_id: "PH-01",
+      current_task_id: "TASK-01",
+      phases: [
+        { phase_id: "PH-01", status: "complete" },
+        { phase_id: "PH-02", status: "not_started" },
+      ],
+      tasks: [
+        { task_id: "TASK-01", status: "complete" },
+        { task_id: "TASK-02", status: "not_started" },
+      ],
+    });
+    const second = await repository.prepareNextExecutionPhase("RUN-PHASES");
+    expect(second).toMatchObject({
+      firstPhaseId: "PH-02",
+      firstTaskId: "TASK-02",
+      phaseOrdinal: 2,
+      phaseCount: 2,
+      progress: {
+        status: "in_progress",
+        current_phase_id: "PH-02",
+        current_task_id: "TASK-02",
+      },
+    });
+    expect(second?.progress.phases).toContainEqual({
+      phase_id: "PH-02",
+      status: "in_progress",
+    });
+    expect(second?.progress.tasks).toContainEqual({
+      task_id: "TASK-02",
+      status: "in_progress",
+    });
+    await repository.saveExecutionProgress({
+      run_id: second!.progress.run_id,
+      work_package_id: second!.progress.work_package_id,
+      run_plan_id: second!.progress.run_plan_id,
+      run_plan_revision: second!.progress.run_plan_revision,
+      status: "in_progress",
+      current_phase_id: "PH-02",
+      current_task_id: "TASK-02",
+      phases: [
+        { phase_id: "PH-01", status: "complete" },
+        { phase_id: "PH-02", status: "complete" },
+      ],
+      tasks: [
+        { task_id: "TASK-01", status: "complete" },
+        { task_id: "TASK-02", status: "complete" },
+      ],
+    });
+    await expect(
+      repository.prepareNextExecutionPhase("RUN-PHASES"),
+    ).resolves.toBeNull();
+    await expect(
+      repository.readExecutionProgress("RUN-PHASES"),
+    ).resolves.toMatchObject({
+      status: "complete",
+      phases: [
+        { phase_id: "PH-01", status: "complete" },
+        { phase_id: "PH-02", status: "complete" },
+      ],
+    });
+  });
+
   it("rejects artifacts whose filesystem target escapes through a symlink", async () => {
     const config = await fixture();
     const outside = path.join(

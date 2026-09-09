@@ -82,6 +82,11 @@ export class RuntimeState {
         profile.adapter ?? "codex_app_server",
         now,
       );
+    this.db
+      .prepare(
+        `UPDATE prompt_profiles SET prompt_mode = 'standard', updated_at = ? WHERE task_type = 'run_plan_execution' AND prompt_mode = 'goal'`,
+      )
+      .run(now);
   }
 
   updateProfile(profile: PromptProfile): PromptProfile {

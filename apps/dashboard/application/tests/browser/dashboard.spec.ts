@@ -1219,6 +1219,7 @@ test("active run shows validated phase and task progress", async ({ page }) => {
   await expect(
     page.getByRole("heading", { name: "Phase and task progress" }),
   ).toBeVisible();
+  await expect(page.getByText("Phase prompts", { exact: true })).toBeVisible();
   await expect(page.getByText("PH-01", { exact: true })).toBeVisible();
   await expect(page.getByText("Phase · in progress · Building")).toBeVisible();
   await expect(page.getByText("TASK-02", { exact: true })).toBeVisible();

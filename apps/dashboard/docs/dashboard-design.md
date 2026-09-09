@@ -23,7 +23,7 @@ The dashboard is not the authoritative store. Durable requirements, plans, appro
 - Rejected source artifacts remain in their original locations. The dashboard derives a rejected view from decision records; it does not move or duplicate the artifact.
 - Codex runs locally through Codex App Server using the signed-in user's Codex or ChatGPT account. A manual task-packet workflow remains available as a fallback.
 - For the MVP, generating an implementation run plan from one approved requirement uses one standard prompt to GPT-5.6 Sol (`gpt-5.6-sol`). It does not create or use a Codex goal.
-- Executing an approved run plan uses a Codex goal prompt with GPT-5.6 Luna (`gpt-5.6-luna`) and `high` reasoning.
+- Executing an approved run plan uses one standard Codex prompt per phase with GPT-5.6 Luna (`gpt-5.6-luna`) and `high` reasoning. The dashboard owns phase sequencing and does not depend on the native goals feature.
 - File-boundary enforcement begins with detection. Unexpected changes block automatic acceptance and require review; clearly forbidden changes may fail the task.
 
 ## Prompt task profiles
@@ -34,7 +34,7 @@ The MVP has three prompt-based task types. Work-package membership is selected b
 | ----------------------- | ----------------------------------------------------------------------------------------------- | --------------- | ------------------------------------------------- |
 | Work-package sequencing | Suggest the implementation order for the approved run plans already selected for a work package | Standard prompt | Model and reasoning default to be configured      |
 | Run-plan generation     | Produce or revise one phased implementation run plan from one approved requirement              | Standard prompt | `gpt-5.6-sol`; reasoning default to be configured |
-| Run-plan execution      | Implement one exact approved run plan selected by an approved work package                      | Goal prompt     | `gpt-5.6-luna`; `high` reasoning                  |
+| Run-plan execution      | Implement one phase of one exact approved run plan selected by an approved work package         | Standard prompt | `gpt-5.6-luna`; `high` reasoning                  |
 
 The dashboard exposes a model and reasoning-effort parameter for each task type. The prompt mode is fixed by task type. Administrators can set dashboard defaults, and the operator can review or override the effective profile before submitting an individual task.
 
@@ -371,18 +371,21 @@ sequenceDiagram
     Core->>Git: Create isolated worktree
     loop Each run plan in approved sequence
         Core->>Runner: Dispatch full run plan and task packet
-        Runner->>Codex: Start task with Luna/high and submit goal prompt
-        Codex-->>Runner: Stream events and phase/task progress
-        Runner-->>UI: Publish progress projection
-        Codex->>Git: Read, edit, and test within task boundaries
-        Codex-->>Runner: Report outcome
+        Runner->>Codex: Start task with Luna/high
+        loop Each phase in approved order
+            Runner->>Codex: Submit current-phase standard prompt
+            Codex-->>Runner: Stream events and phase/task progress
+            Runner-->>UI: Publish progress projection
+            Codex->>Git: Read, edit, and test within task boundaries
+            Codex-->>Runner: Report phase outcome
+        end
         Runner->>Core: Submit result manifest
         Core->>Git: Validate diff and quality gates
         Core-->>UI: Show result or blocker
     end
 ```
 
-For implementation, the runner processes the approved work package in ascending sequence order. For each run plan, it starts a Codex task with GPT-5.6 Luna (`gpt-5.6-luna`) at `high` reasoning and submits the full approved implementation run plan as a goal prompt. The goal is bound to that run-plan revision and remains the execution objective across implementation turns until it is completed or becomes blocked. A later run plan cannot start until the preceding plan is accepted. This is distinct from run-plan generation, which uses one standard Sol prompt without a goal.
+For implementation, the runner processes the approved work package in ascending sequence order. For each run plan, it starts a Codex task with GPT-5.6 Luna (`gpt-5.6-luna`) at `high` reasoning and submits the full approved implementation run plan with one current-phase assignment. When that phase and all its tasks are complete, the dashboard submits the next phase on the same Codex task. A non-critical issue is recorded as a note and does not stop execution; a phase blocks only when its functionality, objective, verification, or exit criteria cannot be completed. A later run plan cannot start until the preceding plan is complete, validated, and accepted.
 
 Each task packet contains:
 
@@ -471,7 +474,7 @@ The first dashboard release is usable when it can:
 8. Suggest and display the run-plan implementation sequence through the configurable work-package sequencing profile.
 9. Create immutable approval or rejection records for work-package membership and sequencing.
 10. Run preflight and explain blockers.
-11. Execute each run plan in approved sequence using a goal prompt with GPT-5.6 Luna at high reasoning, or prepare an equivalent manual task packet.
+11. Execute each run plan in approved sequence using one standard prompt per phase with GPT-5.6 Luna at high reasoning, or prepare an equivalent manual task packet.
 12. Record the Codex thread identifier and display phase, task, and run-plan progress without modifying the approved plan.
 13. Support pause, resume, retry, cancellation, and replanning commands.
 14. Compare the worktree to the base commit and classify changed paths.

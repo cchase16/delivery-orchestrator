@@ -17,10 +17,14 @@ const execFileAsync = promisify(execFile);
 const templateVersions = {
   work_package_sequencing: "work-package-sequencing.v1",
   run_plan_generation: "run-plan-generation.v3",
-  run_plan_execution: "run-plan-execution.v2",
+  run_plan_execution: "run-plan-execution.v3",
 } as const;
 
 const runPlanTemplateDirectory = path.join("templates", "run-plan");
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
 
 function requirementName(content: string, fallback: string): string {
   const heading = content.match(/^#\s+(.+?)\s*$/m)?.[1]?.trim();
@@ -73,9 +77,7 @@ export function codexAppServerInitializeParams() {
       title: "Factory Dashboard",
       version: "0.1.0",
     },
-    capabilities: {
-      experimentalApi: true,
-    },
+    capabilities: {},
   } as const;
 }
 
@@ -130,10 +132,11 @@ export class PromptBuilder {
       firstPhaseTitle: string;
       firstTaskId: string;
       firstTaskTitle: string;
+      phaseOrdinal: number;
+      phaseCount: number;
     },
   ): Promise<PromptPacket> {
-    const expectedMode =
-      taskType === "run_plan_execution" ? "goal" : "standard";
+    const expectedMode = "standard";
     if (profile.promptMode !== expectedMode)
       throw new Error(`${taskType} requires a ${expectedMode} prompt.`);
     if (artifactIds.length === 0)
@@ -204,15 +207,17 @@ export class PromptBuilder {
       })
       .join("\n\n");
     let runPlanTemplate = "";
-    const executionGoal =
+    const executionAssignment =
       taskType === "run_plan_execution"
         ? [
             `Review the implementation run plan ${execution?.planPath ?? documents[0]?.artifact.path ?? artifactIds[0]}.`,
-            `When ready, begin implementing this document, starting with ${execution ? `${execution.firstPhaseId} (${execution.firstPhaseTitle}), ${execution.firstTaskId} (${execution.firstTaskTitle})` : "the first listed phase and task"}.`,
-            "Work in order and keep working until every item is complete.",
             execution
-              ? `As each task and phase is completed, update the status in ${execution.progressFilePath}.`
-              : "As each task and phase is completed, update the supplied execution-progress overlay.",
+              ? `Implement only phase ${execution.phaseOrdinal} of ${execution.phaseCount}: ${execution.firstPhaseId} (${execution.firstPhaseTitle}), starting with ${execution.firstTaskId} (${execution.firstTaskTitle}).`
+              : "Implement only the currently activated phase, starting with its first incomplete task.",
+            "Work through every task in the assigned phase in order, including its tests, verification, and exit criteria. Do not begin a later phase.",
+            execution
+              ? `As each task and the assigned phase are completed, update the status in ${execution.progressFilePath}.`
+              : "As each task and the assigned phase are completed, update the supplied execution-progress overlay.",
           ].join(" ")
         : undefined;
     const instruction =
@@ -257,11 +262,13 @@ export class PromptBuilder {
         : taskType === "work_package_sequencing"
           ? "Suggest an execution sequence only for the supplied approved run plans. Explain dependencies, shared Odoo modules, path overlap, database concerns, conflicts, and risk. Return exactly one JSON object with ordered_run_plan_ids and rationale. Do not rewrite any run plan."
           : [
-              "Treat the approved implementation run plan as immutable and execute it as one persistent goal.",
-              "Implement phases and tasks strictly in their listed order and perform the plan's verification work.",
+              "Treat the approved implementation run plan as immutable. The dashboard owns the execution sequence and assigns exactly one phase per turn.",
+              "Implement only the assigned phase and perform all of that phase's verification work. Do not begin any later phase.",
               "The execution-progress file is the only workflow status document you may edit; preserve its identifiers and JSON structure.",
               "When beginning a task, mark it in_progress. When it is finished and verified, mark it complete. Mark a phase complete only when every task in that phase is complete.",
-              "If required input, permission, compatibility, or validation is unresolved, mark the current task, phase, and overall execution blocked, add a concrete note, and stop. Never mark incomplete or deferred work complete.",
+              "A critical blocker is an issue that prevents the assigned phase's functionality, objective, verification, or exit criteria from being completed. For a critical blocker, mark the affected task, assigned phase, and overall execution blocked, add a concrete note, and stop.",
+              "A non-critical issue does not prevent the assigned phase's functionality, objective, verification, or exit criteria. Record it in the relevant note, keep working, and do not set a blocked status solely because of it.",
+              "For an intermediate phase, leave overall execution in_progress after the phase is complete. For the final phase, set overall execution complete after the phase and all plan tasks are complete. Never mark incomplete work complete.",
               "Do not begin another run plan. The dashboard will start the next sequenced plan only after this plan's execution, validation, and acceptance statuses are green.",
             ].join("\n");
     const commonHeader = [
@@ -293,8 +300,9 @@ export class PromptBuilder {
             "Exact input artifacts:",
             artifactText,
             "",
-            "Goal:",
-            executionGoal ?? "Execute the approved run plan.",
+            "Current phase assignment:",
+            executionAssignment ??
+              "Execute the currently assigned run-plan phase.",
             "",
             "Write boundary: product changes belong only in the isolated product worktree. Do not edit delivery artifacts, approvals, evidence, or release records. Never approve your own work.",
           ].join("\n")
@@ -328,7 +336,6 @@ export class PromptBuilder {
       templateVersion: templateVersions[taskType],
       redactionApplied,
       inputArtifacts: inputs,
-      ...(executionGoal ? { goal: executionGoal } : {}),
       prompt,
     };
   }
@@ -428,6 +435,14 @@ export interface ExecutionAdapter {
     actualModel: string;
     actualReasoningEffort: PromptPacket["reasoningEffort"];
   }>;
+  continueTask?(
+    taskId: string,
+    packet: PromptPacket,
+  ): Promise<{
+    taskId: string;
+    actualModel: string;
+    actualReasoningEffort: PromptPacket["reasoningEffort"];
+  }>;
   read?(taskId: string): Promise<CodexTaskSnapshot>;
   interrupt?(taskId: string): Promise<void>;
   close?(): Promise<void>;
@@ -483,6 +498,33 @@ export class FakeExecutionAdapter implements ExecutionAdapter {
     };
   }
 
+  async continueTask(taskId: string, packet: PromptPacket) {
+    if (this.behavior.startError) throw new Error(this.behavior.startError);
+    if (!this.tasks.has(taskId))
+      throw new Error(`Fake task is unavailable: ${taskId}`);
+    this.tasks.set(taskId, {
+      taskId,
+      status: this.behavior.status ?? "completed",
+      output: this.behavior.output ?? "fake adapter output",
+      events: [
+        {
+          method: "item/completed",
+          params: {
+            item: {
+              type: "agentMessage",
+              text: this.behavior.output ?? "fake adapter output",
+            },
+          },
+        },
+      ],
+    });
+    return {
+      taskId,
+      actualModel: packet.model,
+      actualReasoningEffort: packet.reasoningEffort,
+    };
+  }
+
   async read(taskId: string): Promise<CodexTaskSnapshot> {
     return (
       this.tasks.get(taskId) ?? {
@@ -514,13 +556,18 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
       lines: readline.Interface;
       events: Array<Record<string, unknown>>;
       turnId: string;
+      turnEventOffset: number;
       send: (method: string, params: unknown, id?: number) => void;
       nextId: () => number;
     }
   >();
   private readonly completedEvents = new Map<
     string,
-    { events: Array<Record<string, unknown>>; turnId: string }
+    {
+      events: Array<Record<string, unknown>>;
+      turnId: string;
+      turnEventOffset: number;
+    }
   >();
 
   private awaitResponse(
@@ -592,13 +639,9 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
   }
 
   async start(packet: PromptPacket) {
-  const child = spawn(
-    "codex",
-    ["app-server", "--enable", "goals", "--listen", "stdio://"],
-    {
+    const child = spawn("codex", ["app-server", "--listen", "stdio://"], {
       stdio: ["pipe", "pipe", "inherit"],
-    },
-  );
+    });
     const lines = readline.createInterface({ input: child.stdout });
     let nextId = 0;
     let activeThreadId = "";
@@ -609,10 +652,6 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
         const message = JSON.parse(line) as Record<string, unknown>;
         if (message.id === undefined && typeof message.method === "string") {
           events.push(message);
-          if (message.method === "turn/completed") {
-            const shutdown = setTimeout(() => child.kill(), 50);
-            shutdown.unref();
-          }
         }
       } catch {
         // Ignore diagnostic lines; JSON-RPC notifications are captured above.
@@ -620,9 +659,11 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
     });
     child.once("exit", () => {
       if (activeThreadId) {
+        const session = this.sessions.get(activeThreadId);
         this.completedEvents.set(activeThreadId, {
           events,
-          turnId: activeTurnId,
+          turnId: session?.turnId ?? activeTurnId,
+          turnEventOffset: session?.turnEventOffset ?? 0,
         });
         this.sessions.delete(activeThreadId);
       }
@@ -668,20 +709,7 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
       if (!threadId)
         throw new Error("Codex App Server did not return a thread id.");
       activeThreadId = threadId;
-      if (packet.promptMode === "goal") {
-        const goalId = ++nextId;
-        const goalResponse = this.awaitResponse(lines, child, goalId);
-        send(
-          "thread/goal/set",
-          {
-            threadId,
-            objective: packet.goal ?? packet.prompt.slice(0, 4000),
-            status: "active",
-          },
-          goalId,
-        );
-        await goalResponse;
-      }
+      const turnEventOffset = events.length;
       const turnRequestId = ++nextId;
       const turnResponse = this.awaitResponse(lines, child, turnRequestId);
       send(
@@ -714,6 +742,7 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
         lines,
         events,
         turnId,
+        turnEventOffset,
         send,
         nextId: () => ++nextId,
       });
@@ -729,13 +758,75 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
     }
   }
 
+  async continueTask(taskId: string, packet: PromptPacket) {
+    const session = this.sessions.get(taskId);
+    if (!session)
+      throw new Error(
+        `Codex task ${taskId} is unavailable for phase continuation.`,
+      );
+    const current = await this.read(taskId);
+    if (
+      ["inprogress", "in_progress", "running"].includes(
+        current.status.toLowerCase(),
+      )
+    )
+      throw new Error(
+        `Codex task ${taskId} has not finished its current phase.`,
+      );
+    const turnEventOffset = session.events.length;
+    const turnRequestId = session.nextId();
+    const turnResponse = this.awaitResponse(
+      session.lines,
+      session.child,
+      turnRequestId,
+    );
+    session.send(
+      "turn/start",
+      {
+        threadId: taskId,
+        input: [{ type: "text", text: packet.prompt }],
+        model: packet.model,
+        effort: packet.reasoningEffort,
+        ...(packet.executionContext
+          ? {
+              cwd: packet.executionContext.cwd,
+              sandboxPolicy: {
+                type: "workspaceWrite",
+                writableRoots: packet.executionContext.writableRoots,
+                networkAccess: false,
+              },
+            }
+          : {}),
+      },
+      turnRequestId,
+    );
+    const turnResponseValue = await turnResponse;
+    const turnId = String(turnResponseValue.result?.turn?.id ?? "");
+    if (!turnId) throw new Error("Codex App Server did not return a turn id.");
+    session.turnId = turnId;
+    session.turnEventOffset = turnEventOffset;
+    return {
+      taskId,
+      actualModel: packet.model,
+      actualReasoningEffort: packet.reasoningEffort,
+    };
+  }
+
   async read(taskId: string): Promise<CodexTaskSnapshot> {
     const session = this.sessions.get(taskId);
     const completed = this.completedEvents.get(taskId);
     const events = session?.events ?? completed?.events ?? [];
-    const completedTurn = [...events]
-      .reverse()
-      .find((event) => event.method === "turn/completed");
+    const turnId = session?.turnId ?? completed?.turnId ?? "";
+    const turnEventOffset =
+      session?.turnEventOffset ?? completed?.turnEventOffset ?? 0;
+    const turnEvents = events.slice(turnEventOffset);
+    const completedTurn = [...turnEvents].reverse().find((event) => {
+      if (event.method !== "turn/completed") return false;
+      if (!turnId) return true;
+      const params = isRecord(event.params) ? event.params : undefined;
+      const turn = isRecord(params?.turn) ? params.turn : undefined;
+      return String(turn?.id ?? "") === turnId;
+    });
     const turn =
       typeof completedTurn?.params === "object" &&
       completedTurn.params !== null &&
@@ -747,7 +838,7 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
             unknown
           >)
         : null;
-    const completedMessages = events
+    const completedMessages = turnEvents
       .filter((event) => event.method === "item/completed")
       .map((event) =>
         typeof event.params === "object" && event.params !== null
@@ -760,7 +851,7 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
       )
       .filter((item) => item.type === "agentMessage")
       .map((item) => String(item.text ?? ""));
-    const deltas = events
+    const deltas = turnEvents
       .filter((event) => event.method === "item/agentMessage/delta")
       .map((event) =>
         typeof event.params === "object" && event.params !== null

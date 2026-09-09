@@ -69,17 +69,17 @@ The browser never reads repositories, starts processes, invokes Git, or writes w
 
 ### Application components
 
-| Component            | Responsibility                                                                                                                              |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| React UI             | Views, filters, artifact review, approval dialogs, prompt-profile controls, execution monitoring, and diff/evidence presentation            |
-| Dashboard API        | Localhost transport, request validation, actor/session context, typed response mapping, and event streaming                                 |
-| Repository inspector | Read-only repository discovery, Git status, artifact indexing, digest calculation, schema results, and derived projections                  |
-| Orchestration core   | Command validation, legal transitions, idempotency, approval enforcement, durable record creation, and reconciliation                       |
-| Schema validator     | Versioned JSON Schema registry, format checks, compatibility checks, and path-level validation errors                                       |
-| State store          | SQLite-backed leases, heartbeats, caches, process metadata, log offsets, prompt defaults, and reconnect information                         |
-| Dispatcher           | Converts eligible workflow work into an execution-adapter request and records requested and actual execution settings                       |
-| Codex adapter        | Starts and supervises App Server, submits standard or goal prompts, records task/thread identity, and maps Codex events into runtime events |
-| Validation runner    | Executes allowlisted deterministic checks and captures structured evidence without exposing arbitrary shell execution                       |
+| Component            | Responsibility                                                                                                                                              |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| React UI             | Views, filters, artifact review, approval dialogs, prompt-profile controls, execution monitoring, and diff/evidence presentation                            |
+| Dashboard API        | Localhost transport, request validation, actor/session context, typed response mapping, and event streaming                                                 |
+| Repository inspector | Read-only repository discovery, Git status, artifact indexing, digest calculation, schema results, and derived projections                                  |
+| Orchestration core   | Command validation, legal transitions, idempotency, approval enforcement, durable record creation, and reconciliation                                       |
+| Schema validator     | Versioned JSON Schema registry, format checks, compatibility checks, and path-level validation errors                                                       |
+| State store          | SQLite-backed leases, heartbeats, caches, process metadata, log offsets, prompt defaults, and reconnect information                                         |
+| Dispatcher           | Converts eligible workflow work into an execution-adapter request and records requested and actual execution settings                                       |
+| Codex adapter        | Starts and supervises App Server, submits standard prompts and phase continuations, records task/thread identity, and maps Codex events into runtime events |
+| Validation runner    | Executes allowlisted deterministic checks and captures structured evidence without exposing arbitrary shell execution                                       |
 
 ### Suggested source layout
 
@@ -154,7 +154,7 @@ The local backend owns the Codex App Server process and protocol connection. The
 
 - Run-plan generation sends one standard prompt using the configured generation profile.
 - Work-package sequencing sends one standard prompt using the configured sequencing profile.
-- Run-plan execution creates a goal using the configured execution profile and supplies the full approved implementation run plan.
+- Run-plan execution supplies the full approved implementation run plan and one current-phase assignment per standard App Server turn.
 - Discover model and reasoning capabilities from the active adapter and reject unsupported selections.
 - Persist task/thread identifiers, requested settings, actual settings, prompt-template version, and reconnect metadata.
 - Use a fake adapter for automated tests and require an explicit operator action for live Codex integration tests.
@@ -356,7 +356,7 @@ This path uses the locally authenticated Codex installation and does not require
 - [x] Build per-invocation confirmation controls that display and permit an override of the effective model and reasoning effort.
 - [x] Query the active execution adapter for available models and supported reasoning levels.
 - [x] Reject unsupported combinations and unavailable models; never substitute a fallback unless the operator explicitly selected an allowed fallback policy.
-- [x] Fix prompt mode by task type: standard prompt for planning and run-plan generation, goal prompt for run-plan execution.
+- [x] Fix prompt mode by task type: use standard prompts for planning, run-plan generation, and dashboard-sequenced run-plan phases.
 - [x] Define and version prompt templates for each task type, reusing the existing portfolio/batch planning instructions where appropriate.
 - [x] Implement prompt assembly with exact artifact references, digests, relevant system context, output contract, and write boundaries.
 - [x] Add prompt preview with secret and customer-sensitive-data redaction checks.
@@ -450,13 +450,13 @@ This path uses the locally authenticated Codex installation and does not require
 - An operator can turn approved run plans into a schema-valid, human-approved work package and explicit sequence.
 - The package binds every included run-plan revision and digest and records the effective sequencing profile.
 
-## Phase 8 — Preflight and goal-driven implementation execution
+## Phase 8 — Preflight and phase-driven implementation execution
 
 **Status:** `COMPLETE — 2026-09-06`
 
 **Depends on:** Phases 5 and 7
 
-**Objective:** Execute every run plan in an approved work package, in sequence, through goal-driven Codex tasks.
+**Objective:** Execute every run plan in an approved work package, in sequence, through dashboard-managed Codex phase turns.
 
 ### Development tasks
 
@@ -467,7 +467,8 @@ This path uses the locally authenticated Codex installation and does not require
 - [x] Resolve the exact product base commit and create an isolated worktree and legal task branch.
 - [x] Build each implementation task packet with the full approved run plan, exact inputs, allowed and forbidden paths, validation criteria, and stop conditions.
 - [x] Start the Codex task with the effective execution model and reasoning settings; default to `gpt-5.6-luna` with `high` reasoning.
-- [x] Submit the full approved run plan as a goal prompt and keep it active across implementation turns until that plan is completed or blocked.
+- [x] Submit the full approved run plan with one current-phase assignment per standard prompt, reusing the Codex task until the plan is complete or blocked.
+- [x] Advance only after the current phase and all of its tasks are complete; record non-critical issues without blocking otherwise complete phase functionality.
 - [x] Record the returned Codex task/thread identifier and actual execution settings.
 - [x] Stream or poll execution events into the local projection without committing high-frequency telemetry.
 - [x] Record phase and task progress in a separate execution record keyed by the stable identifiers in the approved plan.
@@ -486,7 +487,7 @@ This path uses the locally authenticated Codex installation and does not require
 - [x] Integration-test lease contention, worktree creation, task dispatch, reconnect, cancellation, and crash recovery with the fake adapter.
 - [x] Verify no implementation task can write to the delivery, orchestrator, requirements-factory, or development-factory inputs.
 - [x] Run an explicitly authorized live Codex smoke test with a disposable no-op worktree.
-- [x] Verify the live task receives a full approved run-plan payload as a goal prompt and records Luna/high as requested and actual settings when available.
+- [x] Verify the live task receives a full approved run-plan payload and current-phase assignment and records Luna/high as requested and actual settings when available.
 - [x] Verify multi-plan packages execute serially in exact approved sequence and stop when a plan is blocked or fails.
 - [x] Verify progress updates do not change or invalidate the approved run-plan digest.
 
@@ -542,7 +543,7 @@ This path uses the locally authenticated Codex installation and does not require
 ### Development tasks
 
 - [ ] Prepare schema-valid sidecars and exact digests for the context-menu requirement and its system-plan context.
-- [ ] Run the complete path: requirement approval -> full run-plan generation -> run-plan approval -> work-package assembly/order -> work-package approval -> preflight -> Luna/high goal execution -> progress tracking -> diff review -> validation -> result disposition.
+- [ ] Run the complete path: requirement approval -> full run-plan generation -> run-plan approval -> work-package assembly/order -> work-package approval -> preflight -> Luna/high phase execution -> progress tracking -> diff review -> validation -> result disposition.
 - [ ] Record every defect and workflow ambiguity found during the pilot; resolve release-blocking issues and explicitly defer the rest.
 - [x] Add end-to-end tests for the successful pilot path and the highest-risk blocked/rejected paths.
 - [x] Perform path traversal, command injection, unsafe document rendering, secret leakage, CSRF/local-origin, and arbitrary-shell-execution reviews.
@@ -563,7 +564,7 @@ This path uses the locally authenticated Codex installation and does not require
 The hardening checks exercise large output and full-diff retention, malformed
 fixture repositories, lease contention, cancelled and failed tasks, process
 termination/restart reconciliation, stale task recovery, and a disposable live
-Codex App Server goal. The performance baseline above was measured against the
+Codex App Server task. The performance baseline above was measured against the
 configured local customer delivery repository without changing its durable
 records.
 
@@ -599,6 +600,6 @@ The dashboard MVP is complete only when Phases 0–10 are marked `COMPLETE` and 
 
 ## Implementation checkpoint — 2026-09-06
 
-The first implementation slice is runnable under `apps/dashboard/application/`. It includes the React/Fastify shell, repository indexing and exact SHA-256 artifact bindings, versioned contract schemas and AJV registry, safe Markdown/binary artifact access, prompt-profile persistence with adapter selection, standard/goal prompt packet assembly with approval enforcement, a fake adapter, a Codex App Server stdio adapter boundary, guarded prompt-task dispatch with requested/actual settings recording, pending approval projection, planning queues, workflow-event and evidence history projections, validated canonical run-plan output persistence with immutable regeneration revisions, structured artifact comparison, immutable work-package revisions, sequencing task dispatch with deterministic fallback ordering and proposal validation, schema-validated command handling, preflight blockers, local run controls, isolated product worktree creation with legal task branches, goal dispatch with task identity recording, task-event polling and guarded serial continuation, separate schema-validated execution progress overlays, deterministic isolated-worktree Git diff classification, validation evidence and result-disposition manifests, release-readiness projections, unit/integration tests, and a Playwright browser journey.
+The first implementation slice is runnable under `apps/dashboard/application/`. It includes the React/Fastify shell, repository indexing and exact SHA-256 artifact bindings, versioned contract schemas and AJV registry, safe Markdown/binary artifact access, prompt-profile persistence with adapter selection, standard prompt packet assembly with approval enforcement, a fake adapter, a Codex App Server stdio adapter boundary, guarded prompt-task dispatch with requested/actual settings recording, pending approval projection, planning queues, workflow-event and evidence history projections, validated canonical run-plan output persistence with immutable regeneration revisions, structured artifact comparison, immutable work-package revisions, sequencing task dispatch with deterministic fallback ordering and proposal validation, schema-validated command handling, preflight blockers, local run controls, isolated product worktree creation with legal task branches, dashboard-managed phase dispatch with task identity recording, task-event polling and guarded serial continuation, separate schema-validated execution progress overlays, deterministic isolated-worktree Git diff classification, validation evidence and result-disposition manifests, release-readiness projections, unit/integration tests, and a Playwright browser journey.
 
-The current configured customer delivery repository intentionally reports two execution blockers: `delivery.lock` is still `unresolved`, and no system-plan artifact exists under `customer-odoo-delivery/system-plans/`. Those are repository/workflow inputs, not dashboard code defects. The implementation must not start a governed live run until the lock is resolved and the system plan is present and valid. Phases 0–9 are complete; Phase 10 is in progress for the customer pilot and final acceptance. The implementation has completed the isolated-worktree boundary, active App Server task polling, guarded multi-plan continuation, artifact comparison, work-package revisioning, dependency analysis and graph presentation, sequencing proposal validation including cycle detection, isolated-worktree diff review, repository write locking, symlink-safe artifact access, path-boundary conflict preflight checks, queryable structured preflight checks before start, progress-overlay digest protection, configured-repository read-only execution roots with the linked product `.git` metadata exception needed for task-branch commits, named allowlisted quality gates with product-declared requirements and explicit skipped/unconfigured outcomes, product-declared no-shell quality-gate runners, path-safe evidence-manifest navigation, evidence-manifest UI, acceptance-traceability schema and exact-binding validation UI, capability-backed profile settings with no-fallback resolution, system-context/product-baseline prompt gating, validated task-output application for run-plan generation and sequencing, full approved-plan goal-prompt assembly coverage, redacted prompt-packet snapshot coverage, explicit failed/partial evidence outcome coverage, degraded-data states, responsive navigation, all three approval-gate browser decision coverage, failure/exception/replanning evidence browser coverage, cancellation and restart-reconciliation HTTP coverage, execution-boundary audit evidence, disposable HTTP workflow coverage through the real server boundary, live local Codex App Server Luna/high smoke coverage, hardening and performance baselines, runtime reconstruction after `.factory-local/` deletion, and release operations documentation. The verification command passes 30 unit/integration tests and the browser suite passes 16 journeys, including keyboard focus, accessible status-name, run-plan comparison/approval/rejection/regeneration, requirement approval, work-package revision/approval/rejection, cancellation, restart reconciliation, acceptance traceability, and blocked-result recovery coverage. Remaining unchecked items are intentionally preserved in the Phase 10 checklist because they require customer delivery inputs or final human acceptance.
+The current configured customer delivery repository intentionally reports two execution blockers: `delivery.lock` is still `unresolved`, and no system-plan artifact exists under `customer-odoo-delivery/system-plans/`. Those are repository/workflow inputs, not dashboard code defects. The implementation must not start a governed live run until the lock is resolved and the system plan is present and valid. Phases 0–9 are complete; Phase 10 is in progress for the customer pilot and final acceptance. The implementation has completed the isolated-worktree boundary, active App Server task polling, guarded multi-plan continuation, artifact comparison, work-package revisioning, dependency analysis and graph presentation, sequencing proposal validation including cycle detection, isolated-worktree diff review, repository write locking, symlink-safe artifact access, path-boundary conflict preflight checks, queryable structured preflight checks before start, progress-overlay digest protection, configured-repository read-only execution roots with the linked product `.git` metadata exception needed for task-branch commits, named allowlisted quality gates with product-declared requirements and explicit skipped/unconfigured outcomes, product-declared no-shell quality-gate runners, path-safe evidence-manifest navigation, evidence-manifest UI, acceptance-traceability schema and exact-binding validation UI, capability-backed profile settings with no-fallback resolution, system-context/product-baseline prompt gating, validated task-output application for run-plan generation and sequencing, full approved-plan phase-prompt assembly coverage, redacted prompt-packet snapshot coverage, explicit failed/partial evidence outcome coverage, degraded-data states, responsive navigation, all three approval-gate browser decision coverage, failure/exception/replanning evidence browser coverage, cancellation and restart-reconciliation HTTP coverage, execution-boundary audit evidence, disposable HTTP workflow coverage through the real server boundary, live local Codex App Server Luna/high smoke coverage, hardening and performance baselines, runtime reconstruction after `.factory-local/` deletion, and release operations documentation. The verification command passes 30 unit/integration tests and the browser suite passes 16 journeys, including keyboard focus, accessible status-name, run-plan comparison/approval/rejection/regeneration, requirement approval, work-package revision/approval/rejection, cancellation, restart reconciliation, acceptance traceability, and blocked-result recovery coverage. Remaining unchecked items are intentionally preserved in the Phase 10 checklist because they require customer delivery inputs or final human acceptance.

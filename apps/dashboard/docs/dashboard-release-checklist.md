@@ -23,7 +23,9 @@ release. A checked item requires evidence in the review or test record.
 
 - [ ] Preflight passes with no unresolved blocker.
 - [ ] Execution uses an isolated product worktree and declared path boundaries.
-- [ ] Luna/high execution settings are confirmed for the implementation goal.
+- [ ] Luna/high execution settings are confirmed for each phase turn.
+- [ ] The next phase starts only after the current phase and all of its tasks are complete.
+- [ ] Non-critical issues are recorded without blocking otherwise complete phase functionality.
 - [ ] Progress is recorded separately from the approved run-plan document.
 - [ ] The complete diff has been reviewed, including untracked, deleted, and
       renamed paths.

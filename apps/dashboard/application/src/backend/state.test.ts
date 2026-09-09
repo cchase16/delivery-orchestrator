@@ -104,4 +104,37 @@ describe("RuntimeState", () => {
     });
     state.close();
   });
+
+  it("migrates the execution profile away from the native goals mode", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "factory-profile-"));
+    roots.push(root);
+    const state = new RuntimeState(root);
+    const profile: PromptProfile = {
+      taskType: "run_plan_execution",
+      label: "Run-plan execution",
+      model: "gpt-5.6-luna",
+      reasoningEffort: "high",
+      promptMode: "standard",
+      adapter: "fake",
+    };
+    state.seedProfiles([profile]);
+    state.updateProfile({
+      ...profile,
+      model: "gpt-5.6-terra",
+      promptMode: "goal",
+    });
+
+    state.seedProfiles([profile]);
+
+    expect(state.getPromptProfiles()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          taskType: "run_plan_execution",
+          model: "gpt-5.6-terra",
+          promptMode: "standard",
+        }),
+      ]),
+    );
+    state.close();
+  });
 });

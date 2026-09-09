@@ -60,10 +60,11 @@ leases, task reconnect data, logs, and the SQLite state database live under
 
 **Start implementation** creates one isolated product worktree and starts the
 first approved run plan in the work package's saved sequence. Each plan is sent
-to Codex as a concise goal, prefixed with the configured system plan, product
-baseline, module inventory, factory boundaries, and the exact approved run-plan
-content. Codex is instructed to execute the plan in phase/task order and never
-start another plan itself.
+to Codex one phase at a time as a standard prompt, prefixed with the configured
+system plan, product baseline, module inventory, factory boundaries, and the
+exact approved run-plan content. The dashboard keeps the Codex task open and
+submits the next phase only after the current phase and all of its tasks report
+`complete`.
 
 The approved Markdown and sidecar remain immutable. The task updates its narrow
 writable progress file at
@@ -71,14 +72,18 @@ writable progress file at
 that file against the execution-progress schema and the exact phase/task IDs in
 the approved sidecar before reflecting it in the UI.
 
-The next run plan starts automatically only after the current Codex task has
-ended, all current-plan phase and task statuses are `complete`, validation
-evidence bound to that package sequence and exact plan revision passes, and the
-operator accepts the result. Evidence from an earlier sequence cannot unlock a
-later plan. A blocked or incomplete status keeps the package on the current
-sequence. Resolve the blocker and use
-**Retry task** to run that plan again; **Resume run** is only a fallback for a
-previously accepted sequence whose automatic dispatch could not start.
+The phase prompt distinguishes critical blockers from non-critical issues.
+Codex records non-critical issues in progress notes and continues. It marks the
+phase blocked only when its functionality, objective, verification, or exit
+criteria cannot be completed. **Retry task** resumes the first incomplete task
+in that phase. If the dashboard restarted and cannot reconnect to the old App
+Server session, retry starts a replacement Codex task with the same worktree
+and current-phase context.
+
+The next run plan starts automatically only after every phase and task in the
+current plan is `complete`, validation evidence bound to that package sequence
+and exact plan revision passes, and the operator accepts the result. Evidence
+from an earlier sequence cannot unlock a later plan.
 
 ### Manual delivery-lock resolution
 
@@ -138,10 +143,10 @@ delivery repository.
   configured `system-plans/` directory; do not bypass preflight.
 - **Codex App Server unavailable:** verify `codex app-server --help` works in
   the same PowerShell session, or select the fake adapter for fixture tests.
-- **`thread/goal/set requires experimentalApi capability`:** restart the
-  dashboard from the current build. The App Server adapter negotiates
-  `capabilities.experimentalApi` during initialization before creating a native
-  goal.
+- **A native-goal capability, feature, or `thread_goals` database error:**
+  restart the dashboard from the current build. Run-plan execution uses stable
+  App Server turns and dashboard-owned phase sequencing; it does not call the
+  native goals API.
 - **A plan or package is stale:** refresh and create a new revision; immutable
   approvals are never overwritten.
 - **An artifact is rejected:** inspect the reason and create a reviewed

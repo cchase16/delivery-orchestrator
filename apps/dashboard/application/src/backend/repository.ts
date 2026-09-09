@@ -49,10 +49,22 @@ const defaultProfiles: PromptProfile[] = [
     label: "Run-plan execution",
     model: "gpt-5.6-luna",
     reasoningEffort: "high",
-    promptMode: "goal",
+    promptMode: "standard",
     adapter: "codex_app_server",
   },
 ];
+
+export interface PreparedExecutionPhase {
+  progress: ExecutionProgress;
+  progressFilePath: string;
+  planPath: string;
+  firstPhaseId: string;
+  firstPhaseTitle: string;
+  firstTaskId: string;
+  firstTaskTitle: string;
+  phaseOrdinal: number;
+  phaseCount: number;
+}
 
 async function exists(target: string): Promise<boolean> {
   try {
@@ -2258,15 +2270,7 @@ export class DeliveryRepository {
     runId: string;
     workPackageId: string;
     runPlanId: string;
-  }): Promise<{
-    progress: ExecutionProgress;
-    progressFilePath: string;
-    planPath: string;
-    firstPhaseId: string;
-    firstPhaseTitle: string;
-    firstTaskId: string;
-    firstTaskTitle: string;
-  }> {
+  }): Promise<PreparedExecutionPhase> {
     const snapshot = await this.snapshot();
     const plan = snapshot.artifacts.find(
       (artifact) =>
@@ -2323,6 +2327,209 @@ export class DeliveryRepository {
       firstPhaseTitle: firstPhase.title,
       firstTaskId: firstTask.taskId,
       firstTaskTitle: firstTask.title,
+      phaseOrdinal: 1,
+      phaseCount: structure.phases.length,
+    };
+  }
+
+  async prepareNextExecutionPhase(
+    runId: string,
+  ): Promise<PreparedExecutionPhase | null> {
+    const progress = await this.syncExecutionProgress(runId);
+    if (!progress) throw new Error("Execution progress is missing.");
+    const snapshot = await this.snapshot();
+    const plan = snapshot.artifacts.find(
+      (artifact) =>
+        artifact.id === progress.run_plan_id &&
+        artifact.kind === "run_plan" &&
+        artifact.status === "approved" &&
+        artifact.revision === progress.run_plan_revision,
+    );
+    if (!plan)
+      throw new Error(
+        "Execution progress does not target an approved run-plan revision.",
+      );
+    const structure = await this.readExecutionPlanStructure(plan);
+    const currentPhaseIndex = structure.phases.findIndex(
+      (phase) => phase.phaseId === progress.current_phase_id,
+    );
+    if (currentPhaseIndex < 0)
+      throw new Error("Execution progress has no current run-plan phase.");
+    const currentPhase = structure.phases[currentPhaseIndex];
+    const currentPhaseStatus = progress.phases?.find(
+      (phase) => phase.phase_id === currentPhase.phaseId,
+    )?.status;
+    const currentTaskIds = new Set(
+      currentPhase.tasks.map((task) => task.taskId),
+    );
+    const incompleteTasks = progress.tasks.filter(
+      (task) => currentTaskIds.has(task.task_id) && task.status !== "complete",
+    );
+    if (currentPhaseStatus !== "complete" || incompleteTasks.length) {
+      const details = [
+        currentPhaseStatus !== "complete"
+          ? `${currentPhase.phaseId} status is ${currentPhaseStatus ?? "missing"}`
+          : "",
+        incompleteTasks.length
+          ? `incomplete tasks: ${incompleteTasks.map((task) => task.task_id).join(", ")}`
+          : "",
+      ].filter(Boolean);
+      throw new Error(
+        `Current phase functionality is incomplete (${details.join("; ")}).`,
+      );
+    }
+    const futurePhaseIds = new Set(
+      structure.phases
+        .slice(currentPhaseIndex + 1)
+        .map((phase) => phase.phaseId),
+    );
+    const futureTaskIds = new Set(
+      structure.phases
+        .slice(currentPhaseIndex + 1)
+        .flatMap((phase) => phase.tasks.map((task) => task.taskId)),
+    );
+    const touchedFuturePhases = (progress.phases ?? []).filter(
+      (phase) =>
+        futurePhaseIds.has(phase.phase_id) && phase.status !== "not_started",
+    );
+    const touchedFutureTasks = progress.tasks.filter(
+      (task) =>
+        futureTaskIds.has(task.task_id) && task.status !== "not_started",
+    );
+    if (touchedFuturePhases.length || touchedFutureTasks.length)
+      throw new Error(
+        "The completed turn changed a later phase; phase execution must remain sequential.",
+      );
+    const nextPhase = structure.phases[currentPhaseIndex + 1];
+    if (!nextPhase) {
+      if (progress.status !== "complete")
+        await this.saveExecutionProgress({
+          run_id: progress.run_id,
+          work_package_id: progress.work_package_id,
+          run_plan_id: progress.run_plan_id,
+          run_plan_revision: progress.run_plan_revision,
+          status: "complete",
+          current_phase_id: progress.current_phase_id,
+          current_task_id: progress.current_task_id,
+          phases: progress.phases,
+          tasks: progress.tasks,
+        });
+      return null;
+    }
+    const firstTask = nextPhase.tasks[0];
+    const nextProgress = await this.saveExecutionProgress({
+      run_id: progress.run_id,
+      work_package_id: progress.work_package_id,
+      run_plan_id: progress.run_plan_id,
+      run_plan_revision: progress.run_plan_revision,
+      status: "in_progress",
+      current_phase_id: nextPhase.phaseId,
+      current_task_id: firstTask.taskId,
+      phases: (progress.phases ?? []).map((phase) =>
+        phase.phase_id === nextPhase.phaseId
+          ? { ...phase, status: "in_progress" as const, note: undefined }
+          : phase,
+      ),
+      tasks: progress.tasks.map((task) =>
+        task.task_id === firstTask.taskId
+          ? { ...task, status: "in_progress" as const, note: undefined }
+          : task,
+      ),
+    });
+    return {
+      progress: nextProgress,
+      progressFilePath: path.join(
+        this.config.runtimeDirectory,
+        "progress-input",
+        runId,
+        "progress.json",
+      ),
+      planPath: path.resolve(this.config.deliveryRepository, plan.path),
+      firstPhaseId: nextPhase.phaseId,
+      firstPhaseTitle: nextPhase.title,
+      firstTaskId: firstTask.taskId,
+      firstTaskTitle: firstTask.title,
+      phaseOrdinal: currentPhaseIndex + 2,
+      phaseCount: structure.phases.length,
+    };
+  }
+
+  async prepareCurrentExecutionPhase(
+    runId: string,
+  ): Promise<PreparedExecutionPhase> {
+    const progress = await this.syncExecutionProgress(runId);
+    if (!progress) throw new Error("Execution progress is missing.");
+    const snapshot = await this.snapshot();
+    const plan = snapshot.artifacts.find(
+      (artifact) =>
+        artifact.id === progress.run_plan_id &&
+        artifact.kind === "run_plan" &&
+        artifact.status === "approved" &&
+        artifact.revision === progress.run_plan_revision,
+    );
+    if (!plan)
+      throw new Error(
+        "Execution progress does not target an approved run-plan revision.",
+      );
+    const structure = await this.readExecutionPlanStructure(plan);
+    const currentPhaseIndex = structure.phases.findIndex(
+      (phase) => phase.phaseId === progress.current_phase_id,
+    );
+    if (currentPhaseIndex < 0)
+      throw new Error("Execution progress has no current run-plan phase.");
+    const currentPhase = structure.phases[currentPhaseIndex];
+    const currentPhaseTaskIds = new Set(
+      currentPhase.tasks.map((task) => task.taskId),
+    );
+    const firstIncompleteTask = currentPhase.tasks.find(
+      (task) =>
+        progress.tasks.find((item) => item.task_id === task.taskId)?.status !==
+        "complete",
+    );
+    const currentPhaseStatus = progress.phases?.find(
+      (phase) => phase.phase_id === currentPhase.phaseId,
+    )?.status;
+    if (!firstIncompleteTask && currentPhaseStatus === "complete")
+      throw new Error(
+        "The current phase is already complete; continue to the next phase or validate the run plan.",
+      );
+    const selectedTask = firstIncompleteTask ?? currentPhase.tasks[0];
+    const resumedProgress = await this.saveExecutionProgress({
+      run_id: progress.run_id,
+      work_package_id: progress.work_package_id,
+      run_plan_id: progress.run_plan_id,
+      run_plan_revision: progress.run_plan_revision,
+      status: "in_progress",
+      current_phase_id: currentPhase.phaseId,
+      current_task_id: selectedTask.taskId,
+      phases: (progress.phases ?? []).map((phase) =>
+        phase.phase_id === currentPhase.phaseId
+          ? { ...phase, status: "in_progress" as const, note: undefined }
+          : phase,
+      ),
+      tasks: progress.tasks.map((task) => {
+        if (!currentPhaseTaskIds.has(task.task_id)) return task;
+        if (task.status === "complete") return task;
+        if (task.task_id === selectedTask.taskId)
+          return { ...task, status: "in_progress" as const, note: undefined };
+        return { ...task, status: "not_started" as const };
+      }),
+    });
+    return {
+      progress: resumedProgress,
+      progressFilePath: path.join(
+        this.config.runtimeDirectory,
+        "progress-input",
+        runId,
+        "progress.json",
+      ),
+      planPath: path.resolve(this.config.deliveryRepository, plan.path),
+      firstPhaseId: currentPhase.phaseId,
+      firstPhaseTitle: currentPhase.title,
+      firstTaskId: selectedTask.taskId,
+      firstTaskTitle: selectedTask.title,
+      phaseOrdinal: currentPhaseIndex + 1,
+      phaseCount: structure.phases.length,
     };
   }
 

@@ -434,9 +434,11 @@ Complete only after all checks pass.
     expect(snapshotAfterStart.value.runtimeActions).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          actionType: "implementation_task_started",
+          actionType: "implementation_phase_started",
           payload: expect.objectContaining({
-            promptMode: "goal",
+            promptMode: "standard",
+            phaseId: "PH-01",
+            phaseOrdinal: 1,
             executionContext: expect.objectContaining({
               cwd: started.value.worktreePath,
               writableRoots: expect.arrayContaining([
@@ -588,7 +590,7 @@ Complete only after all checks pass.
     expect(advanced.value.runtimeActions).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          actionType: "implementation_task_started",
+          actionType: "implementation_phase_started",
           payload: expect.objectContaining({ runPlanId: followUpPlan.id }),
         }),
       ]),
