@@ -592,7 +592,7 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
   }
 
   async start(packet: PromptPacket) {
-    const child = spawn("codex", ["app-server", "--listen", "stdio://"], {
+    const child = spawn("codex", ["app-server", "--enable goals --listen", "stdio://"], {
       stdio: ["pipe", "pipe", "inherit"],
     });
     const lines = readline.createInterface({ input: child.stdout });
