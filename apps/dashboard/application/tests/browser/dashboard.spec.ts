@@ -1044,6 +1044,94 @@ test("work-package sequencing applies a validated model proposal", async ({
   ]);
 });
 
+test("approved work-package member shows its current approval state", async ({
+  page,
+}) => {
+  const runPlanId = "RP-BROWSER-APPROVED";
+  const workPackageId = "WP-BROWSER-APPROVED";
+  const snapshot = {
+    generatedAt: "2026-09-09T12:00:00.000Z",
+    system: {
+      id: "test-system",
+      name: "Test system",
+      branch: "main",
+      deliveryPath: "delivery",
+      lockStatus: "resolved",
+      productHead: "a".repeat(40),
+    },
+    health: [],
+    artifacts: [
+      {
+        id: runPlanId,
+        title: "Approved member plan",
+        kind: "run_plan",
+        path: `run-plans/${runPlanId}.md`,
+        extension: "md",
+        revision: 1,
+        digest: "b".repeat(64),
+        status: "approved",
+        updatedAt: "2026-09-09T11:00:00.000Z",
+        phaseCount: 1,
+        taskCount: 1,
+      },
+      {
+        id: workPackageId,
+        title: "Approved package",
+        kind: "work_package",
+        path: `work-packages/${workPackageId}.json`,
+        extension: "json",
+        revision: 1,
+        digest: "c".repeat(64),
+        status: "approved",
+        updatedAt: "2026-09-09T11:30:00.000Z",
+      },
+    ],
+    approvals: [],
+    activeRun: null,
+    promptProfiles: [],
+    blockers: [],
+    validationErrors: [],
+  };
+  await page.route("**/api/snapshot", async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(snapshot),
+    }),
+  );
+  await page.route(`**/api/artifacts/${workPackageId}`, async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        content: JSON.stringify({
+          members: [
+            {
+              run_plan_id: runPlanId,
+              revision: 1,
+              path: `run-plans/${runPlanId}.md`,
+              sequence: 1,
+            },
+          ],
+        }),
+      }),
+    }),
+  );
+
+  await page.goto("/");
+  await page
+    .getByRole("button", { name: "Work Packages", exact: true })
+    .click();
+  const member = page.locator(".package-member", {
+    hasText: "Approved member plan",
+  });
+  await expect(member.getByText("Approval", { exact: true })).toBeVisible();
+  await expect(member.locator(".status-badge")).toHaveText("approved");
+  await expect(
+    member.getByText("awaiting review", { exact: true }),
+  ).toHaveCount(0);
+});
+
 test("validation review records evidence before accepting a result", async ({
   page,
 }) => {

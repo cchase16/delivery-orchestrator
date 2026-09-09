@@ -3002,7 +3002,7 @@ function WorkPackagesPage({
                           : member.sequence === activeRun.sequence
                             ? activeRun.status
                             : "awaiting_review"
-                        : "awaiting_review";
+                        : null;
                       return (
                         <div
                           className="package-member"
@@ -3026,7 +3026,18 @@ function WorkPackagesPage({
                                 : "Not started"}
                             </small>
                           </div>
-                          <StatusBadge status={executionStatus} />
+                          <div className="package-member-statuses">
+                            <span>
+                              <small>Approval</small>
+                              <StatusBadge status={plan?.status ?? "missing"} />
+                            </span>
+                            {executionStatus && (
+                              <span>
+                                <small>Execution</small>
+                                <StatusBadge status={executionStatus} />
+                              </span>
+                            )}
+                          </div>
                           <button
                             className="secondary-button"
                             onClick={() =>
