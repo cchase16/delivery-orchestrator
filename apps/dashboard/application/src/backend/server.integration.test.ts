@@ -403,6 +403,26 @@ Complete only after all checks pass.
       reasoningEffort: "high",
       adapter: "fake",
     });
+    const cancelledTurn = await request(
+      port,
+      `/api/runs/${encodeURIComponent(cancelledRun.value.runId)}/control`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "cancel_turn" }),
+      },
+    );
+    expect(cancelledTurn.response.ok).toBe(true);
+    expect(cancelledTurn.value).toMatchObject({
+      runId: cancelledRun.value.runId,
+      status: "blocked",
+      currentTask: expect.stringContaining("Active turn cancelled"),
+    });
+    const snapshotAfterTurnCancellation = await request(port, "/api/snapshot");
+    expect(snapshotAfterTurnCancellation.value.activeRun).toMatchObject({
+      runId: cancelledRun.value.runId,
+      status: "blocked",
+    });
     const cancelled = await request(
       port,
       `/api/runs/${encodeURIComponent(cancelledRun.value.runId)}/control`,
@@ -417,6 +437,8 @@ Complete only after all checks pass.
       runId: cancelledRun.value.runId,
       status: "cancelled",
     });
+    const snapshotAfterCancellation = await request(port, "/api/snapshot");
+    expect(snapshotAfterCancellation.value.activeRun).toBeNull();
     const started = await request(port, "/api/runs", {
       method: "POST",
       headers: { "content-type": "application/json" },

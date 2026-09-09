@@ -451,6 +451,7 @@ export interface ExecutionAdapter {
   }>;
   read?(taskId: string): Promise<CodexTaskSnapshot>;
   interrupt?(taskId: string): Promise<void>;
+  abandon?(taskId: string): Promise<void>;
   close?(): Promise<void>;
 }
 
@@ -749,6 +750,10 @@ export class FakeExecutionAdapter implements ExecutionAdapter {
   async interrupt(taskId: string): Promise<void> {
     const task = this.tasks.get(taskId);
     if (task) this.tasks.set(taskId, { ...task, status: "cancelled" });
+  }
+
+  async abandon(taskId: string): Promise<void> {
+    await this.interrupt(taskId);
   }
 }
 
@@ -1137,6 +1142,35 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
       requestId,
     );
     await response;
+  }
+
+  async abandon(taskId: string): Promise<void> {
+    const session = this.sessions.get(taskId);
+    if (!session) {
+      this.completedEvents.delete(taskId);
+      return;
+    }
+    const task = await this.read(taskId);
+    if (
+      ["inprogress", "in_progress", "running"].includes(
+        task.status.toLowerCase(),
+      )
+    ) {
+      try {
+        await this.interrupt(taskId);
+      } catch {
+        // Closing the dedicated App Server process is the final cancellation
+        // boundary when a turn can no longer acknowledge interruption.
+      }
+    }
+    this.completedEvents.set(taskId, {
+      events: session.events,
+      turnId: session.turnId,
+      turnEventOffset: session.turnEventOffset,
+    });
+    this.sessions.delete(taskId);
+    session.lines.close();
+    if (!session.child.killed) session.child.kill();
   }
 
   async close(): Promise<void> {

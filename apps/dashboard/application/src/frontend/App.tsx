@@ -471,8 +471,22 @@ export default function App() {
 
   async function controlRun(
     runId: string,
-    action: "pause" | "resume" | "cancel" | "complete" | "retry" | "replan",
+    action:
+      | "pause"
+      | "resume"
+      | "cancel_turn"
+      | "cancel"
+      | "complete"
+      | "retry"
+      | "replan",
   ) {
+    if (
+      action === "cancel" &&
+      !window.confirm(
+        "Cancel and abandon this run? Its worktree and audit history will be preserved, but the run cannot be resumed.",
+      )
+    )
+      return;
     try {
       const response = await fetch(
         `/api/runs/${encodeURIComponent(runId)}/control`,
@@ -487,7 +501,13 @@ export default function App() {
           ((await response.json()) as { error?: string }).error ??
             "Run control was rejected",
         );
-      setNotice(`Run ${action} requested`);
+      setNotice(
+        action === "cancel_turn"
+          ? "Active turn cancelled; the run remains available for retry"
+          : action === "cancel"
+            ? "Run cancelled and abandoned"
+            : `Run ${action} requested`,
+      );
       await loadSnapshot();
     } catch (cause) {
       setNotice(
@@ -842,7 +862,14 @@ function PageContent({
   ) => void;
   onRunControl: (
     runId: string,
-    action: "pause" | "resume" | "cancel" | "complete" | "retry" | "replan",
+    action:
+      | "pause"
+      | "resume"
+      | "cancel_turn"
+      | "cancel"
+      | "complete"
+      | "retry"
+      | "replan",
   ) => Promise<void>;
   onProfileUpdate: (profile: PromptProfile) => Promise<void>;
   onResetRepository: () => Promise<void>;
@@ -3152,10 +3179,19 @@ function ActiveRunsPage({
   snapshot: Snapshot;
   onRunControl: (
     runId: string,
-    action: "pause" | "resume" | "cancel" | "complete" | "retry" | "replan",
+    action:
+      | "pause"
+      | "resume"
+      | "cancel_turn"
+      | "cancel"
+      | "complete"
+      | "retry"
+      | "replan",
   ) => Promise<void>;
 }) {
-  const run = snapshot.activeRun ?? snapshot.latestRun ?? null;
+  const run =
+    snapshot.activeRun ??
+    (snapshot.latestRun?.status === "failed" ? snapshot.latestRun : null);
   const [progress, setProgress] = useState<ExecutionProgress | null>(null);
   const [changedFiles, setChangedFiles] = useState<
     Array<{ path: string; change: string; classification: string }>
@@ -3456,6 +3492,15 @@ function ActiveRunsPage({
             </div>
           )}
           <div className="detail-actions">
+            {run.status === "in_progress" && run.taskId && (
+              <button
+                className="secondary-button"
+                onClick={() => void onRunControl(run.runId, "cancel_turn")}
+              >
+                <X size={15} />
+                Cancel active turn
+              </button>
+            )}
             {["ready", "in_progress", "blocked"].includes(run.status) && (
               <button
                 className="secondary-button"

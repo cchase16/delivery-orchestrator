@@ -87,6 +87,13 @@ warnings, and the final App Server error when a turn fails. The most recent
 failed run remains visible with retry and replan controls after it stops being
 the active run.
 
+**Cancel active turn** interrupts only the current Codex turn and leaves the run
+blocked and retryable in its existing worktree. **Cancel run** is terminal: it
+interrupts any running turn, closes the run's App Server session, releases the
+orchestrator lease, and removes the run from **Active Runs**. The abandoned
+worktree and audit history are preserved for review, but the run cannot be
+resumed; start a new run to capture a new product baseline.
+
 The next run plan starts automatically only after every phase and task in the
 current plan is `complete`, validation evidence bound to that package sequence
 and exact plan revision passes, and the operator accepts the result. Evidence

@@ -1211,7 +1211,14 @@ app.post<{
 app.post<{
   Params: { runId: string };
   Body: {
-    action: "pause" | "resume" | "cancel" | "complete" | "retry" | "replan";
+    action:
+      | "pause"
+      | "resume"
+      | "cancel_turn"
+      | "cancel"
+      | "complete"
+      | "retry"
+      | "replan";
   };
 }>("/api/runs/:runId/control", async (request, reply) => {
   const status =
@@ -1227,6 +1234,24 @@ app.post<{
   try {
     const activeRun = repository.getRun(request.params.runId);
     if (!activeRun) throw new Error(`Run not found: ${request.params.runId}`);
+    if (request.body?.action === "cancel_turn") {
+      if (activeRun.status !== "in_progress" || !activeRun.taskId)
+        throw new Error("The run has no active Codex turn to cancel.");
+      const adapter =
+        adapters[activeRun.adapter as keyof typeof adapters] ??
+        adapters.codex_app_server;
+      await adapter.interrupt?.(activeRun.taskId);
+      state.recordAction(
+        "run_turn_cancelled",
+        { runId: activeRun.runId, taskId: activeRun.taskId },
+        `run-turn-cancel:${activeRun.runId}:${activeRun.taskId}`,
+      );
+      return repository.updateRun(activeRun.runId, {
+        status: "blocked",
+        currentTask:
+          "Active turn cancelled by local operator · retry or cancel the run",
+      });
+    }
     const runState =
       activeRun.status === "ready"
         ? "ready"
@@ -1273,14 +1298,18 @@ app.post<{
           ? { resolution_note: "Resumed by local operator." }
           : { reason: `${request.body?.action} requested by local operator.` },
     });
-    if (
-      activeRun.taskId &&
-      (request.body?.action === "pause" || request.body?.action === "cancel")
-    ) {
+    if (activeRun.taskId && request.body?.action === "pause") {
       const adapter =
         adapters[activeRun.adapter as keyof typeof adapters] ??
         adapters.codex_app_server;
       await adapter.interrupt?.(activeRun.taskId);
+    }
+    if (activeRun.taskId && request.body?.action === "cancel") {
+      const adapter =
+        adapters[activeRun.adapter as keyof typeof adapters] ??
+        adapters.codex_app_server;
+      if (adapter.abandon) await adapter.abandon(activeRun.taskId);
+      else await adapter.interrupt?.(activeRun.taskId);
     }
     if (request.body?.action === "retry") {
       const currentPlanId = await packageRunPlanId(

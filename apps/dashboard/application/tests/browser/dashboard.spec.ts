@@ -1249,6 +1249,131 @@ test("active run shows validated phase and task progress", async ({ page }) => {
   expect(browserErrors).toEqual([]);
 });
 
+test("operator can cancel a turn without abandoning the run, then cancel the run", async ({
+  page,
+}) => {
+  const controlActions: string[] = [];
+  let activeRun: Record<string, unknown> | null = {
+    runId: "RUN-CANCEL-CONTROLS",
+    workPackageId: "WP-CANCEL-CONTROLS",
+    title: "Cancellation controls",
+    startedAt: "2026-09-09T12:00:00.000Z",
+    sequence: 1,
+    total: 1,
+    currentPhase: "PH-01 · Foundation",
+    currentTask: "TASK-01 · Active implementation",
+    progress: 10,
+    status: "in_progress",
+    model: "gpt-5.6-luna",
+    reasoningEffort: "high",
+    adapter: "fake",
+    taskId: "TASK-FAKE-CANCEL",
+  };
+  let latestRun: Record<string, unknown> | null = null;
+  await page.route("**/api/snapshot", async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        generatedAt: "2026-09-09T12:00:00.000Z",
+        system: {
+          id: "test-system",
+          name: "Test system",
+          branch: "main",
+          deliveryPath: "delivery",
+          lockStatus: "resolved",
+        },
+        health: [],
+        artifacts: [],
+        approvals: [],
+        activeRun,
+        latestRun,
+        promptProfiles: [],
+        blockers: [],
+        validationErrors: [],
+      }),
+    }),
+  );
+  await page.route("**/api/runs/RUN-CANCEL-CONTROLS/progress", async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        schema_version: 1,
+        run_id: "RUN-CANCEL-CONTROLS",
+        work_package_id: "WP-CANCEL-CONTROLS",
+        run_plan_id: "RP-CANCEL-CONTROLS",
+        run_plan_revision: 1,
+        status: activeRun?.status ?? "cancelled",
+        phases: [{ phase_id: "PH-01", status: "in_progress" }],
+        tasks: [{ task_id: "TASK-01", status: "in_progress" }],
+      }),
+    }),
+  );
+  await page.route("**/api/prompt-tasks/TASK-FAKE-CANCEL", async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        taskId: "TASK-FAKE-CANCEL",
+        status: activeRun?.status === "in_progress" ? "running" : "cancelled",
+        output: "Working on the active phase",
+        activity: [],
+        events: [],
+      }),
+    }),
+  );
+  await page.route("**/api/runs/RUN-CANCEL-CONTROLS/control", async (route) => {
+    const body = route.request().postDataJSON() as { action: string };
+    controlActions.push(body.action);
+    if (body.action === "cancel_turn" && activeRun) {
+      activeRun = {
+        ...activeRun,
+        status: "blocked",
+        currentTask: "Active turn cancelled by local operator",
+      };
+    } else if (body.action === "cancel" && activeRun) {
+      latestRun = { ...activeRun, status: "cancelled" };
+      activeRun = null;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(activeRun ?? latestRun),
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Active Runs", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Cancel active turn", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Cancel run", exact: true }),
+  ).toBeVisible();
+
+  await page
+    .getByRole("button", { name: "Cancel active turn", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Resume run", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Cancel active turn", exact: true }),
+  ).toHaveCount(0);
+
+  page.once("dialog", async (dialog) => {
+    expect(dialog.type()).toBe("confirm");
+    expect(dialog.message()).toContain("Cancel and abandon this run");
+    await dialog.accept();
+  });
+  await page.getByRole("button", { name: "Cancel run", exact: true }).click();
+  await expect(
+    page.getByText("No active Codex runs", { exact: true }),
+  ).toBeVisible();
+  expect(controlActions).toEqual(["cancel_turn", "cancel"]);
+});
+
 test("failed implementation remains visible with its model error", async ({
   page,
 }) => {

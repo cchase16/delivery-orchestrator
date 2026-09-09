@@ -435,6 +435,10 @@ describe("PromptBuilder and execution adapters", () => {
     await expect(blocked.read(task.taskId)).resolves.toMatchObject({
       status: "cancelled",
     });
+    await blocked.abandon(task.taskId);
+    await expect(blocked.read(task.taskId)).resolves.toMatchObject({
+      status: "cancelled",
+    });
     await expect(
       new FakeExecutionAdapter({ startError: "simulated timeout" }).start(
         packet,
