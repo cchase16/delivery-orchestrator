@@ -11,6 +11,7 @@ import {
   FakeExecutionAdapter,
   PromptBuilder,
   resolveEffectiveProfile,
+  summarizeCodexTurn,
 } from "./prompting.js";
 import { DeliveryRepository } from "./repository.js";
 import { RuntimeState } from "./state.js";
@@ -156,6 +157,82 @@ const executionProfile: PromptProfile = {
 };
 
 describe("PromptBuilder and execution adapters", () => {
+  it("surfaces streamed command activity and the actionable turn error", () => {
+    const events = [
+      { method: "turn/started", params: { turn: { id: "TURN-1" } } },
+      {
+        method: "item/started",
+        params: {
+          item: {
+            type: "userMessage",
+            content: [{ type: "text", text: "private full prompt" }],
+          },
+        },
+      },
+      {
+        method: "item/started",
+        params: {
+          item: {
+            type: "commandExecution",
+            command: "npm test",
+            status: "inProgress",
+          },
+        },
+      },
+      {
+        method: "item/agentMessage/delta",
+        params: { delta: "Inspecting the implementation…" },
+      },
+      {
+        method: "error",
+        params: {
+          error: {
+            message: JSON.stringify({
+              error: { message: "Selected model requires a newer Codex." },
+            }),
+          },
+        },
+      },
+      {
+        method: "turn/completed",
+        params: {
+          turn: {
+            id: "TURN-1",
+            status: "failed",
+            error: {
+              message: JSON.stringify({
+                error: { message: "Selected model requires a newer Codex." },
+              }),
+            },
+          },
+        },
+      },
+    ];
+
+    const task = summarizeCodexTurn("THREAD-1", events, "TURN-1", 0, true);
+
+    expect(task).toMatchObject({
+      status: "failed",
+      output: "Inspecting the implementation…",
+      error: "Selected model requires a newer Codex.",
+    });
+    expect(task.activity).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "command", detail: "npm test" }),
+        expect.objectContaining({ kind: "error", title: "Phase turn failed" }),
+      ]),
+    );
+    expect(task.events).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          params: expect.objectContaining({
+            item: expect.objectContaining({ type: "userMessage" }),
+          }),
+        }),
+      ]),
+    );
+  });
+
   it("uses stable App Server capabilities for standard turns", () => {
     expect(codexAppServerInitializeParams()).toMatchObject({
       capabilities: {},

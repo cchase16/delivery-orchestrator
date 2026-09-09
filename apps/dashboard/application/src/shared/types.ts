@@ -101,6 +101,7 @@ export interface Snapshot {
   artifacts: ArtifactSummary[];
   approvals: ApprovalSummary[];
   activeRun: ActiveRun | null;
+  latestRun?: ActiveRun | null;
   promptProfiles: PromptProfile[];
   blockers: string[];
   events?: WorkflowEventSummary[];

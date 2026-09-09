@@ -25,6 +25,7 @@ import type {
 import { deriveRunPlanSidecar } from "./run-plan-markdown.js";
 import type { DashboardConfig } from "./config.js";
 import { RuntimeState } from "./state.js";
+import { resolveCodexRuntime } from "./codex-runtime.js";
 import type { SchemaRegistry } from "./validation.js";
 
 const defaultProfiles: PromptProfile[] = [
@@ -931,6 +932,7 @@ export class DeliveryRepository {
       artifacts,
       approvals,
       activeRun: this.state.getActiveRun(),
+      latestRun: this.state.getLatestRun(),
       promptProfiles: this.state.getPromptProfiles(),
       blockers,
       events,
@@ -1309,11 +1311,14 @@ export class DeliveryRepository {
     if (this.codexProbe && Date.now() - this.codexProbe.at < 30000)
       return this.codexProbe;
     try {
-      await execFileAsync("codex", ["app-server", "--help"], { timeout: 3000 });
+      const runtime = await resolveCodexRuntime();
+      await execFileAsync(runtime.executable, ["app-server", "--help"], {
+        timeout: 3000,
+      });
       this.codexProbe = {
         at: Date.now(),
         available: true,
-        detail: "Installed · stdio transport available",
+        detail: `Codex ${runtime.version} · stdio transport available · ${runtime.source}`,
       };
     } catch {
       this.codexProbe = {

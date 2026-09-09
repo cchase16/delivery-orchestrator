@@ -221,6 +221,15 @@ export class RuntimeState {
     return row ? (JSON.parse(row.payload) as ActiveRun) : null;
   }
 
+  getLatestRun(): ActiveRun | null {
+    const row = this.db
+      .prepare(
+        "SELECT payload FROM runtime_runs ORDER BY updated_at DESC LIMIT 1",
+      )
+      .get() as { payload: string } | undefined;
+    return row ? (JSON.parse(row.payload) as ActiveRun) : null;
+  }
+
   getRun(runId: string): ActiveRun | null {
     const row = this.db
       .prepare("SELECT payload FROM runtime_runs WHERE run_id = ?")

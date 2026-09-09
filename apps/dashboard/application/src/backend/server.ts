@@ -41,6 +41,27 @@ const adapters = {
 };
 const startingPromptTaskTypes = new Set<PromptProfile["taskType"]>();
 
+function assertAdapterSupportsProfile(
+  capability: Awaited<
+    ReturnType<(typeof adapters)[keyof typeof adapters]["probe"]>
+  >,
+  model: string,
+  reasoningEffort: ReasoningEffort,
+): void {
+  if (
+    capability.models &&
+    !(capability.models as readonly string[]).includes(model)
+  )
+    throw new Error(
+      `${model} is not available from the active Codex App Server. ${capability.detail}`,
+    );
+  const efforts = capability.modelReasoningEfforts?.[model];
+  if (efforts?.length && !efforts.includes(reasoningEffort))
+    throw new Error(
+      `${model} does not support ${reasoningEffort} reasoning in the active Codex App Server. Supported: ${efforts.join(", ")}.`,
+    );
+}
+
 type PromptTaskSummary = CodexTaskSnapshot & {
   taskType: PromptProfile["taskType"];
   adapter: keyof typeof adapters;
@@ -234,6 +255,11 @@ async function dispatchImplementationPhase(
   if (!adapter) throw new Error(`Unknown adapter: ${adapterId}`);
   const capability = await adapter.probe();
   if (!capability.available) throw new Error(capability.detail);
+  assertAdapterSupportsProfile(
+    capability,
+    packet.model,
+    packet.reasoningEffort,
+  );
   const existingTask = existingTaskId
     ? await adapter.read?.(existingTaskId)
     : undefined;
@@ -386,13 +412,53 @@ app.get<{
   };
 }>("/api/preflight", async (request, reply) => {
   try {
-    return await repository.preflight({
+    const result = await repository.preflight({
       workPackageId: request.query.workPackageId,
       model: request.query.model,
       reasoningEffort: request.query.reasoningEffort as
         ReasoningEffort | undefined,
       adapter: request.query.adapter,
     });
+    const adapterId =
+      request.query.adapter === "fake" ? "fake" : "codex_app_server";
+    const capability = await adapters[adapterId].probe();
+    const adapterCheck = result.checks.find(
+      (check) => check.name === "Codex adapter",
+    );
+    if (adapterCheck) {
+      adapterCheck.detail = capability.detail;
+      if (!capability.available) adapterCheck.status = "blocked";
+    }
+    const profileCheck = result.checks.find(
+      (check) => check.name === "Requested profile",
+    );
+    if (
+      profileCheck &&
+      request.query.model &&
+      capability.models &&
+      !(capability.models as readonly string[]).includes(request.query.model)
+    ) {
+      profileCheck.status = "blocked";
+      profileCheck.detail = `${request.query.model} is not available from the active Codex App Server.`;
+    } else if (
+      profileCheck &&
+      request.query.model &&
+      request.query.reasoningEffort
+    ) {
+      const efforts = capability.modelReasoningEfforts?.[request.query.model];
+      if (
+        efforts?.length &&
+        !efforts.includes(request.query.reasoningEffort as ReasoningEffort)
+      ) {
+        profileCheck.status = "blocked";
+        profileCheck.detail = `${request.query.model} does not support ${request.query.reasoningEffort} reasoning.`;
+      }
+    }
+    result.ready = result.checks.every((check) => check.status !== "blocked");
+    result.blockers = result.checks
+      .filter((check) => check.status === "blocked")
+      .map((check) => `${check.name}: ${check.detail}`);
+    return result;
   } catch (cause) {
     return reply.code(409).send({
       error:
@@ -784,6 +850,17 @@ app.post<{ Body: PromptProfile }>(
     const capability = await adapter.probe();
     if (!capability.available)
       return reply.code(409).send({ error: capability.detail });
+    try {
+      assertAdapterSupportsProfile(
+        capability,
+        profile.model,
+        profile.reasoningEffort,
+      );
+    } catch (cause) {
+      return reply.code(409).send({
+        error: cause instanceof Error ? cause.message : "Unsupported profile.",
+      });
+    }
     return state.updateProfile(profile);
   },
 );
@@ -805,7 +882,12 @@ app.get("/api/capabilities", async () => {
         transport: "in-process",
       },
     ],
-    models: supportedPromptModels,
+    models:
+      codex.available && codex.models?.length
+        ? supportedPromptModels.filter((model) =>
+            (codex.models as readonly string[]).includes(model),
+          )
+        : supportedPromptModels,
     reasoningEfforts: supportedReasoningEfforts,
   };
 });
@@ -976,6 +1058,11 @@ app.post<{
       const capability = await adapter.probe();
       if (!capability.available)
         return reply.code(409).send({ error: capability.detail });
+      assertAdapterSupportsProfile(
+        capability,
+        packet.model,
+        packet.reasoningEffort,
+      );
       const result = await adapter.start(packet);
       const actionId = state.recordAction(
         "prompt_task_started",
@@ -1108,7 +1195,10 @@ app.post<{
   } catch (cause) {
     if (startedRunId) {
       try {
-        repository.updateRun(startedRunId, { status: "failed" });
+        repository.updateRun(startedRunId, {
+          status: "failed",
+          currentTask: `Implementation could not start · ${cause instanceof Error ? cause.message : String(cause)}`,
+        });
       } catch {
         /* preserve the original dispatch failure */
       }
@@ -1338,7 +1428,10 @@ const taskMonitor = setInterval(() => {
       if (["failed", "error", "cancelled", "canceled"].includes(normalized))
         repository.updateRun(run.runId, {
           status: "failed",
-          currentTask: `Codex task ${run.taskId} ${normalized}`,
+          currentTask:
+            task?.error || task?.output
+              ? `Phase failed · ${task.error || task.output}`
+              : `Codex task ${run.taskId} ${normalized}`,
         });
       else if (normalized === "blocked")
         repository.updateRun(run.runId, {

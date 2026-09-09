@@ -10,6 +10,7 @@ import type {
 } from "../shared/types.js";
 import type { Snapshot } from "../shared/types.js";
 import type { DashboardConfig } from "./config.js";
+import { resolveCodexRuntime } from "./codex-runtime.js";
 import { DeliveryRepository } from "./repository.js";
 
 const execFileAsync = promisify(execFile);
@@ -429,7 +430,12 @@ export class PromptBuilder {
 
 export interface ExecutionAdapter {
   readonly id: string;
-  probe(): Promise<{ available: boolean; detail: string }>;
+  probe(): Promise<{
+    available: boolean;
+    detail: string;
+    models?: string[];
+    modelReasoningEfforts?: Record<string, ReasoningEffort[]>;
+  }>;
   start(packet: PromptPacket): Promise<{
     taskId: string;
     actualModel: string;
@@ -452,7 +458,201 @@ export interface CodexTaskSnapshot {
   taskId: string;
   status: string;
   output: string;
+  error?: string;
+  activity?: Array<{
+    id: string;
+    kind:
+      "status" | "plan" | "command" | "file" | "warning" | "error" | "request";
+    title: string;
+    detail?: string;
+    status?: string;
+  }>;
   events: Array<Record<string, unknown>>;
+}
+
+function codexErrorMessage(value: unknown): string {
+  if (isRecord(value)) {
+    const nested = codexErrorMessage(value.message ?? value.error);
+    if (nested) return nested;
+  }
+  if (typeof value !== "string") return "";
+  const candidate = value.trim();
+  if (!candidate) return "";
+  try {
+    const parsed = JSON.parse(candidate) as unknown;
+    const nested = codexErrorMessage(parsed);
+    if (nested && nested !== candidate) return nested;
+  } catch {
+    // Plain-text App Server errors are already suitable for display.
+  }
+  return candidate;
+}
+
+function codexItem(
+  event: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const params = isRecord(event.params) ? event.params : undefined;
+  return isRecord(params?.item) ? params.item : null;
+}
+
+export function summarizeCodexTurn(
+  taskId: string,
+  events: Array<Record<string, unknown>>,
+  turnId: string,
+  turnEventOffset: number,
+  sessionActive: boolean,
+): CodexTaskSnapshot {
+  const turnEvents = events.slice(turnEventOffset);
+  const completedTurn = [...turnEvents].reverse().find((event) => {
+    if (event.method !== "turn/completed") return false;
+    if (!turnId) return true;
+    const params = isRecord(event.params) ? event.params : undefined;
+    const turn = isRecord(params?.turn) ? params.turn : undefined;
+    return String(turn?.id ?? "") === turnId;
+  });
+  const completedParams = isRecord(completedTurn?.params)
+    ? completedTurn.params
+    : undefined;
+  const turn = isRecord(completedParams?.turn) ? completedParams.turn : null;
+  const completedMessages = turnEvents
+    .filter((event) => event.method === "item/completed")
+    .map(codexItem)
+    .filter((item): item is Record<string, unknown> => Boolean(item))
+    .filter((item) => item.type === "agentMessage")
+    .map((item) => String(item.text ?? ""))
+    .filter(Boolean);
+  const deltas = turnEvents
+    .filter((event) => event.method === "item/agentMessage/delta")
+    .map((event) => {
+      const params = isRecord(event.params) ? event.params : undefined;
+      return String(params?.delta ?? "");
+    })
+    .join("");
+  const errorEvent = [...turnEvents]
+    .reverse()
+    .find((event) => event.method === "error");
+  const errorParams = isRecord(errorEvent?.params)
+    ? errorEvent.params
+    : undefined;
+  const error =
+    codexErrorMessage(turn?.error) || codexErrorMessage(errorParams?.error);
+  const activity = turnEvents
+    .flatMap((event, index): NonNullable<CodexTaskSnapshot["activity"]> => {
+      const method = String(event.method ?? "");
+      const params = isRecord(event.params) ? event.params : undefined;
+      const item = codexItem(event);
+      const id = `${index}:${method}`;
+      if (method === "turn/started")
+        return [{ id, kind: "status", title: "Phase turn started" }];
+      if (method === "turn/completed")
+        return [
+          {
+            id,
+            kind: error ? "error" : "status",
+            title: error ? "Phase turn failed" : "Phase turn completed",
+            detail: error || undefined,
+            status: String(turn?.status ?? "completed"),
+          },
+        ];
+      if (method === "turn/plan/updated") {
+        const plan = Array.isArray(params?.plan) ? params.plan : [];
+        const detail = plan
+          .map((entry) =>
+            isRecord(entry)
+              ? `${String(entry.status ?? "pending")}: ${String(entry.step ?? entry.description ?? "")}`
+              : String(entry),
+          )
+          .filter(Boolean)
+          .join("\n");
+        return [
+          { id, kind: "plan", title: "Implementation plan updated", detail },
+        ];
+      }
+      if ((method === "item/started" || method === "item/completed") && item) {
+        const itemType = String(item.type ?? "");
+        const finished = method === "item/completed";
+        if (itemType === "commandExecution") {
+          const command = Array.isArray(item.command)
+            ? item.command.join(" ")
+            : String(item.command ?? "");
+          return [
+            {
+              id,
+              kind: "command",
+              title: finished ? "Command completed" : "Running command",
+              detail: command,
+              status: String(
+                item.status ?? (finished ? "completed" : "running"),
+              ),
+            },
+          ];
+        }
+        if (itemType === "fileChange") {
+          const changes = Array.isArray(item.changes) ? item.changes : [];
+          const detail = changes
+            .map((change) =>
+              isRecord(change) ? String(change.path ?? "") : "",
+            )
+            .filter(Boolean)
+            .join("\n");
+          return [
+            {
+              id,
+              kind: "file",
+              title: finished
+                ? "File changes applied"
+                : "Applying file changes",
+              detail,
+              status: String(
+                item.status ?? (finished ? "completed" : "running"),
+              ),
+            },
+          ];
+        }
+      }
+      if (method === "warning")
+        return [
+          {
+            id,
+            kind: "warning",
+            title: "Codex warning",
+            detail: String(params?.message ?? ""),
+          },
+        ];
+      if (method === "error")
+        return [{ id, kind: "error", title: "Codex error", detail: error }];
+      if (method === "app-server/stderr")
+        return [
+          {
+            id,
+            kind: "warning",
+            title: "App Server diagnostic",
+            detail: String(params?.message ?? ""),
+          },
+        ];
+      if (/request|permission|approval|input/i.test(method))
+        return [
+          {
+            id,
+            kind: "request",
+            title: "Operator attention requested",
+            detail: method,
+          },
+        ];
+      return [];
+    })
+    .slice(-100);
+  const publicEvents = turnEvents
+    .filter((event) => codexItem(event)?.type !== "userMessage")
+    .slice(-200);
+  return {
+    taskId,
+    status: String(turn?.status ?? (sessionActive ? "inProgress" : "unknown")),
+    output: completedMessages.at(-1) || deltas || error,
+    ...(error ? { error } : {}),
+    activity,
+    events: publicEvents,
+  };
 }
 
 export interface FakeExecutionBehavior {
@@ -469,7 +669,17 @@ export class FakeExecutionAdapter implements ExecutionAdapter {
   constructor(private readonly behavior: FakeExecutionBehavior = {}) {}
 
   async probe() {
-    return { available: true, detail: "Deterministic test adapter" };
+    return {
+      available: true,
+      detail: "Deterministic test adapter",
+      models: [...supportedPromptModels],
+      modelReasoningEfforts: Object.fromEntries(
+        supportedPromptModels.map((model) => [
+          model,
+          [...supportedReasoningEfforts],
+        ]),
+      ),
+    };
   }
 
   async start(packet: PromptPacket) {
@@ -548,6 +758,8 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
     at: number;
     available: boolean;
     detail: string;
+    models?: string[];
+    modelReasoningEfforts?: Record<string, ReasoningEffort[]>;
   } | null = null;
   private readonly sessions = new Map<
     string,
@@ -577,12 +789,17 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
     timeoutMs = 10000,
   ): Promise<Record<string, any>> {
     return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        clearTimeout(timer);
+        lines.removeListener("line", listener);
+        child.removeListener("error", onError);
+        child.removeListener("exit", onExit);
+      };
       const listener = (line: string) => {
         try {
           const message = JSON.parse(line) as Record<string, any>;
           if (message.id !== id) return;
-          clearTimeout(timer);
-          lines.removeListener("line", listener);
+          cleanup();
           if (message.error)
             reject(
               new Error(
@@ -596,34 +813,96 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
           // Ignore diagnostic lines; JSON-RPC responses are line-delimited.
         }
       };
+      const onError = (error: Error) => {
+        cleanup();
+        reject(error);
+      };
+      const onExit = (code: number | null) => {
+        cleanup();
+        reject(
+          new Error(
+            `Codex App Server exited before request ${id} completed${code === null ? "" : ` (code ${code})`}.`,
+          ),
+        );
+      };
       const timer = setTimeout(() => {
-        lines.removeListener("line", listener);
+        cleanup();
         child.kill();
         reject(
           new Error(`Codex App Server response timed out for request ${id}.`),
         );
       }, timeoutMs);
       lines.on("line", listener);
-      child.once("error", (error) => {
-        clearTimeout(timer);
-        lines.removeListener("line", listener);
-        reject(error);
-      });
+      child.once("error", onError);
+      child.once("exit", onExit);
     });
   }
 
   async probe() {
     if (this.probeResult && Date.now() - this.probeResult.at < 10000)
       return this.probeResult;
+    let child: ReturnType<typeof spawn> | undefined;
+    let lines: readline.Interface | undefined;
+    let diagnostics = "";
     try {
-      await execFileAsync("codex", ["app-server", "--help"], {
+      const runtime = await resolveCodexRuntime();
+      await execFileAsync(runtime.executable, ["app-server", "--help"], {
         timeout: 3000,
         maxBuffer: 1024 * 1024,
       });
+      child = spawn(
+        runtime.executable,
+        ["app-server", "--listen", "stdio://"],
+        { stdio: ["pipe", "pipe", "pipe"] },
+      );
+      if (!child.stdout || !child.stdin)
+        throw new Error("Codex App Server stdio pipes are unavailable.");
+      child.stderr?.on("data", (chunk) => {
+        diagnostics = `${diagnostics}${String(chunk)}`.slice(-4000);
+      });
+      lines = readline.createInterface({ input: child.stdout });
+      let nextId = 0;
+      const send = (method: string, params: unknown, id?: number) => {
+        child!.stdin!.write(
+          `${JSON.stringify({ method, ...(id === undefined ? {} : { id }), params })}\n`,
+        );
+      };
+      const initializeId = ++nextId;
+      const initializeResponse = this.awaitResponse(lines, child, initializeId);
+      send("initialize", codexAppServerInitializeParams(), initializeId);
+      await initializeResponse;
+      send("initialized", {});
+      const modelListId = ++nextId;
+      const modelListResponse = this.awaitResponse(lines, child, modelListId);
+      send("model/list", { limit: 100, includeHidden: false }, modelListId);
+      const response = await modelListResponse;
+      const data = Array.isArray(response.result?.data)
+        ? (response.result.data as Array<Record<string, unknown>>)
+        : [];
+      const models = data
+        .map((model) => String(model.model ?? model.id ?? ""))
+        .filter(Boolean);
+      const modelReasoningEfforts = Object.fromEntries(
+        data.map((model) => {
+          const modelId = String(model.model ?? model.id ?? "");
+          const efforts = Array.isArray(model.supportedReasoningEfforts)
+            ? model.supportedReasoningEfforts
+                .map((entry) =>
+                  isRecord(entry) ? String(entry.reasoningEffort ?? "") : "",
+                )
+                .filter((effort): effort is ReasoningEffort =>
+                  supportedReasoningEfforts.includes(effort as ReasoningEffort),
+                )
+            : [];
+          return [modelId, efforts];
+        }),
+      );
       this.probeResult = {
         at: Date.now(),
         available: true,
-        detail: "Codex App Server uses local stdio JSONL transport",
+        detail: `Codex ${runtime.version} · ${models.length} available model(s) · ${runtime.source}`,
+        models,
+        modelReasoningEfforts,
       };
     } catch (cause) {
       this.probeResult = {
@@ -631,17 +910,23 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
         available: false,
         detail:
           cause instanceof Error
-            ? `Codex App Server unavailable: ${cause.message}`
+            ? `Codex App Server unavailable: ${cause.message}${diagnostics.trim() ? ` · ${diagnostics.trim()}` : ""}`
             : "Codex App Server unavailable",
       };
+    } finally {
+      lines?.close();
+      child?.kill();
     }
     return this.probeResult;
   }
 
   async start(packet: PromptPacket) {
-    const child = spawn("codex", ["app-server", "--listen", "stdio://"], {
-      stdio: ["pipe", "pipe", "inherit"],
-    });
+    const runtime = await resolveCodexRuntime();
+    const child = spawn(
+      runtime.executable,
+      ["app-server", "--listen", "stdio://"],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
     const lines = readline.createInterface({ input: child.stdout });
     let nextId = 0;
     let activeThreadId = "";
@@ -650,12 +935,18 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
     lines.on("line", (line) => {
       try {
         const message = JSON.parse(line) as Record<string, unknown>;
-        if (message.id === undefined && typeof message.method === "string") {
-          events.push(message);
-        }
+        if (typeof message.method === "string") events.push(message);
       } catch {
         // Ignore diagnostic lines; JSON-RPC notifications are captured above.
       }
+    });
+    child.stderr.on("data", (chunk) => {
+      const message = String(chunk).trim();
+      if (message)
+        events.push({
+          method: "app-server/stderr",
+          params: { message: message.slice(-4000) },
+        });
     });
     child.once("exit", () => {
       if (activeThreadId) {
@@ -691,6 +982,7 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
         {
           model: packet.model,
           serviceName: "factory-dashboard",
+          approvalPolicy: "never",
           ...(packet.executionContext
             ? {
                 cwd: packet.executionContext.cwd,
@@ -719,6 +1011,7 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
           input: [{ type: "text", text: packet.prompt }],
           model: packet.model,
           effort: packet.reasoningEffort,
+          approvalPolicy: "never",
           ...(packet.executionContext
             ? {
                 cwd: packet.executionContext.cwd,
@@ -787,6 +1080,7 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
         input: [{ type: "text", text: packet.prompt }],
         model: packet.model,
         effort: packet.reasoningEffort,
+        approvalPolicy: "never",
         ...(packet.executionContext
           ? {
               cwd: packet.executionContext.cwd,
@@ -819,52 +1113,13 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
     const turnId = session?.turnId ?? completed?.turnId ?? "";
     const turnEventOffset =
       session?.turnEventOffset ?? completed?.turnEventOffset ?? 0;
-    const turnEvents = events.slice(turnEventOffset);
-    const completedTurn = [...turnEvents].reverse().find((event) => {
-      if (event.method !== "turn/completed") return false;
-      if (!turnId) return true;
-      const params = isRecord(event.params) ? event.params : undefined;
-      const turn = isRecord(params?.turn) ? params.turn : undefined;
-      return String(turn?.id ?? "") === turnId;
-    });
-    const turn =
-      typeof completedTurn?.params === "object" &&
-      completedTurn.params !== null &&
-      typeof (completedTurn.params as Record<string, unknown>).turn ===
-        "object" &&
-      (completedTurn.params as Record<string, unknown>).turn !== null
-        ? ((completedTurn.params as Record<string, unknown>).turn as Record<
-            string,
-            unknown
-          >)
-        : null;
-    const completedMessages = turnEvents
-      .filter((event) => event.method === "item/completed")
-      .map((event) =>
-        typeof event.params === "object" && event.params !== null
-          ? (event.params as Record<string, unknown>).item
-          : null,
-      )
-      .filter(
-        (item): item is Record<string, unknown> =>
-          typeof item === "object" && item !== null,
-      )
-      .filter((item) => item.type === "agentMessage")
-      .map((item) => String(item.text ?? ""));
-    const deltas = turnEvents
-      .filter((event) => event.method === "item/agentMessage/delta")
-      .map((event) =>
-        typeof event.params === "object" && event.params !== null
-          ? String((event.params as Record<string, unknown>).delta ?? "")
-          : "",
-      )
-      .join("");
-    return {
+    return summarizeCodexTurn(
       taskId,
-      status: String(turn?.status ?? (session ? "inProgress" : "unknown")),
-      output: completedMessages.at(-1) ?? deltas,
-      events: events.slice(-500),
-    };
+      events,
+      turnId,
+      turnEventOffset,
+      Boolean(session),
+    );
   }
 
   async interrupt(taskId: string): Promise<void> {

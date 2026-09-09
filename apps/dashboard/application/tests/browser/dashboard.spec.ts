@@ -1209,6 +1209,15 @@ test("active run shows validated phase and task progress", async ({ page }) => {
         taskId: "TASK-FAKE-1",
         status: "running",
         output: "Implementing TASK-02",
+        activity: [
+          {
+            id: "activity-1",
+            kind: "command",
+            title: "Running command",
+            detail: "npm test",
+            status: "inProgress",
+          },
+        ],
         events: [],
       }),
     }),
@@ -1220,15 +1229,103 @@ test("active run shows validated phase and task progress", async ({ page }) => {
     page.getByRole("heading", { name: "Phase and task progress" }),
   ).toBeVisible();
   await expect(page.getByText("Phase prompts", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "PH-01 · Foundation" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Live model output", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Implementing TASK-02", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Running command", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("npm test", { exact: true })).toBeVisible();
   await expect(page.getByText("PH-01", { exact: true })).toBeVisible();
   await expect(page.getByText("Phase · in progress · Building")).toBeVisible();
   await expect(page.getByText("TASK-02", { exact: true })).toBeVisible();
   await expect(page.getByText("in progress · Testing")).toBeVisible();
-  await page.screenshot({
-    path: "test-results/execution-progress-overlay.png",
-    fullPage: true,
-  });
   expect(browserErrors).toEqual([]);
+});
+
+test("failed implementation remains visible with its model error", async ({
+  page,
+}) => {
+  const failedRun = {
+    runId: "RUN-BROWSER-FAILED",
+    workPackageId: "WP-BROWSER-001",
+    title: "Failed implementation",
+    startedAt: "2026-09-09T11:55:00.000Z",
+    sequence: 1,
+    total: 1,
+    currentPhase: "PH-01 · Foundation",
+    currentTask: "Phase failed · Selected model requires a newer Codex.",
+    progress: 0,
+    status: "failed",
+    model: "gpt-5.6-luna",
+    reasoningEffort: "high",
+    adapter: "codex_app_server",
+    taskId: "THREAD-FAILED-1",
+  };
+  await page.route("**/api/snapshot", async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        generatedAt: "2026-09-09T12:00:00.000Z",
+        system: {
+          id: "test-system",
+          name: "Test system",
+          branch: "main",
+          deliveryPath: "delivery",
+          lockStatus: "resolved",
+        },
+        health: [],
+        artifacts: [],
+        approvals: [],
+        activeRun: null,
+        latestRun: failedRun,
+        promptProfiles: [],
+        blockers: [],
+      }),
+    }),
+  );
+  await page.route("**/api/runs/RUN-BROWSER-FAILED/progress", async (route) =>
+    route.fulfill({ status: 404, body: "{}" }),
+  );
+  await page.route("**/api/prompt-tasks/THREAD-FAILED-1", async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        taskId: "THREAD-FAILED-1",
+        status: "failed",
+        output: "",
+        error: "Selected model requires a newer Codex.",
+        activity: [
+          {
+            id: "error-1",
+            kind: "error",
+            title: "Phase turn failed",
+            detail: "Selected model requires a newer Codex.",
+            status: "failed",
+          },
+        ],
+        events: [],
+      }),
+    }),
+  );
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Active Runs", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Failed implementation" }),
+  ).toBeVisible();
+  await expect(page.locator(".run-task-error")).toContainText(
+    "Selected model requires a newer Codex.",
+  );
+  await expect(page.getByRole("button", { name: "Retry task" })).toBeVisible();
 });
 
 test("operator can manually resolve the delivery lock from Validation", async ({

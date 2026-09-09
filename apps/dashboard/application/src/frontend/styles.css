@@ -1120,6 +1120,43 @@ h2 {
   color: #d8f5e7;
   white-space: pre-wrap;
 }
+.live-output-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 16px 10px;
+  color: #263746;
+  font-size: 13px;
+}
+.run-task-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 16px 12px;
+  padding: 10px 12px;
+  border: 1px solid #efc7c3;
+  border-radius: 6px;
+  background: #fff3f1;
+  color: #963c37;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.run-task-error svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+.task-activity {
+  max-height: 22rem;
+  overflow: auto;
+  margin: 0 16px 12px;
+  border: 1px solid #e4e9ef;
+  border-radius: 6px;
+  background: #fff;
+}
+.task-activity .check-row:last-child {
+  border-bottom: 0;
+}
 .prompt-task-progress {
   margin-top: 14px;
 }

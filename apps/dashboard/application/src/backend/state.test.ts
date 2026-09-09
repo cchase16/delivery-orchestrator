@@ -53,6 +53,11 @@ describe("RuntimeState", () => {
     );
     restarted.updateRun("RUN-TEST", { status: "complete", progress: 100 });
     expect(restarted.getActiveRun()).toBeNull();
+    expect(restarted.getLatestRun()).toMatchObject({
+      runId: "RUN-TEST",
+      status: "complete",
+      progress: 100,
+    });
     restarted.close();
   });
 

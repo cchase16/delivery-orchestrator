@@ -384,8 +384,8 @@ export default function App() {
   const [capabilities, setCapabilities] =
     useState<DashboardCapabilities>(fallbackCapabilities);
 
-  async function loadSnapshot() {
-    setLoading(true);
+  async function loadSnapshot(silent = false) {
+    if (!silent) setLoading(true);
     try {
       const response = await fetch("/api/snapshot");
       if (!response.ok)
@@ -397,7 +397,7 @@ export default function App() {
         cause instanceof Error ? cause.message : "Dashboard API unavailable",
       );
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }
   useEffect(() => {
@@ -418,6 +418,12 @@ export default function App() {
         })
         .then((value) => setCapabilities(value))
         .catch(() => setCapabilities(fallbackCapabilities));
+    const snapshotTimer = isDemo
+      ? undefined
+      : window.setInterval(() => void loadSnapshot(true), 2500);
+    return () => {
+      if (snapshotTimer) window.clearInterval(snapshotTimer);
+    };
   }, []);
   useEffect(() => {
     if (!notice) return;
@@ -3149,6 +3155,7 @@ function ActiveRunsPage({
     action: "pause" | "resume" | "cancel" | "complete" | "retry" | "replan",
   ) => Promise<void>;
 }) {
+  const run = snapshot.activeRun ?? snapshot.latestRun ?? null;
   const [progress, setProgress] = useState<ExecutionProgress | null>(null);
   const [changedFiles, setChangedFiles] = useState<
     Array<{ path: string; change: string; classification: string }>
@@ -3158,10 +3165,26 @@ function ActiveRunsPage({
     taskId: string;
     status: string;
     output: string;
+    error?: string;
+    activity?: Array<{
+      id: string;
+      kind:
+        | "status"
+        | "plan"
+        | "command"
+        | "file"
+        | "warning"
+        | "error"
+        | "request";
+      title: string;
+      detail?: string;
+      status?: string;
+    }>;
     events: Array<Record<string, unknown>>;
   } | null>(null);
+  const [pollError, setPollError] = useState<string | null>(null);
   useEffect(() => {
-    const runId = snapshot.activeRun?.runId;
+    const runId = run?.runId;
     if (!runId || new URLSearchParams(window.location.search).has("demo")) {
       setProgress(null);
       setTaskSnapshot(null);
@@ -3175,20 +3198,28 @@ function ActiveRunsPage({
       );
       if (!cancelled && progressResponse.ok)
         setProgress((await progressResponse.json()) as ExecutionProgress);
-      const taskId = snapshot.activeRun?.taskId;
+      const taskId = run?.taskId;
       if (!taskId) return;
       const taskResponse = await fetch(
         `/api/prompt-tasks/${encodeURIComponent(taskId)}`,
       );
-      if (!cancelled && taskResponse.ok)
+      if (!taskResponse.ok) {
+        const taskError = (await taskResponse.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(
+          taskError.error ?? `Task status returned ${taskResponse.status}.`,
+        );
+      }
+      if (!cancelled)
         setTaskSnapshot((await taskResponse.json()) as typeof taskSnapshot);
-      if (snapshot.activeRun?.baseCommit) {
+      if (run?.baseCommit) {
         const diffResponse = await fetch("/api/diff/review", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             runId,
-            baseCommit: snapshot.activeRun.baseCommit,
+            baseCommit: run.baseCommit,
             allowedPaths: [],
             forbiddenPaths: [],
           }),
@@ -3204,15 +3235,19 @@ function ActiveRunsPage({
           setChangedFiles(diff.entries ?? []);
         }
       }
+      if (!cancelled) setPollError(null);
     };
-    void refresh().catch(() => {
-      if (!cancelled) {
-        setProgress(null);
-        setTaskSnapshot(null);
-      }
-    });
+    const reportRefreshError = (cause: unknown) => {
+      if (!cancelled)
+        setPollError(
+          cause instanceof Error
+            ? cause.message
+            : "Unable to refresh run state.",
+        );
+    };
+    void refresh().catch(reportRefreshError);
     const timer = window.setInterval(() => {
-      void refresh().catch(() => undefined);
+      void refresh().catch(reportRefreshError);
     }, 1500);
     const clock = window.setInterval(() => setNow(Date.now()), 1000);
     return () => {
@@ -3220,18 +3255,17 @@ function ActiveRunsPage({
       window.clearInterval(timer);
       window.clearInterval(clock);
     };
-  }, [snapshot.activeRun?.runId, snapshot.activeRun?.taskId]);
-  const startedAt = snapshot.activeRun?.startedAt
-    ? new Date(snapshot.activeRun.startedAt).getTime()
+  }, [run?.runId, run?.taskId]);
+  const startedAt = run?.startedAt
+    ? new Date(run.startedAt).getTime()
     : undefined;
   const elapsed =
     startedAt && !Number.isNaN(startedAt)
       ? formatElapsed(Math.max(0, now - startedAt))
       : "—";
   const attentionRequests =
-    taskSnapshot?.events.filter((event) =>
-      /request|permission|approval|input/i.test(String(event.method ?? "")),
-    ).length ?? 0;
+    taskSnapshot?.activity?.filter((item) => item.kind === "request").length ??
+    0;
   return (
     <>
       <PageHeader
@@ -3239,40 +3273,39 @@ function ActiveRunsPage({
         title="Active Runs"
         description="Monitor the current Codex task without making the dashboard the execution engine."
       />
-      {snapshot.activeRun ? (
+      {run ? (
         <section className="panel active-run-panel">
           <div className="run-hero">
             <div className="run-orb">
               <TerminalSquare size={25} />
             </div>
             <div>
-              <span className="section-kicker">{snapshot.activeRun.runId}</span>
-              <h2>{snapshot.activeRun.title}</h2>
+              <span className="section-kicker">{run.runId}</span>
+              <h2>{run.title}</h2>
               <p>
-                Sequence {snapshot.activeRun.sequence} of{" "}
-                {snapshot.activeRun.total} · {snapshot.activeRun.model} ·{" "}
-                {snapshot.activeRun.reasoningEffort} reasoning
+                Sequence {run.sequence} of {run.total} · {run.model} ·{" "}
+                {run.reasoningEffort} reasoning
               </p>
             </div>
-            <StatusBadge status={snapshot.activeRun.status} />
+            <StatusBadge status={run.status} />
           </div>
           <div className="big-progress">
             <div>
               <span>Run plan progress</span>
-              <strong>{snapshot.activeRun.progress}%</strong>
+              <strong>{run.progress}%</strong>
             </div>
             <div className="progress-bar">
-              <i style={{ width: snapshot.activeRun.progress + "%" }} />
+              <i style={{ width: run.progress + "%" }} />
             </div>
           </div>
           <div className="run-grid">
             <div>
               <span className="muted-label">Current phase</span>
-              <strong>{snapshot.activeRun.currentPhase}</strong>
+              <strong>{run.currentPhase}</strong>
             </div>
             <div>
               <span className="muted-label">Current task</span>
-              <strong>{snapshot.activeRun.currentTask}</strong>
+              <strong>{run.currentTask}</strong>
             </div>
             <div>
               <span className="muted-label">Execution mode</span>
@@ -3280,16 +3313,16 @@ function ActiveRunsPage({
             </div>
             <div>
               <span className="muted-label">Task adapter</span>
-              <strong>{snapshot.activeRun.adapter ?? "—"}</strong>
+              <strong>{run.adapter ?? "—"}</strong>
             </div>
             <div>
               <span className="muted-label">Implementation branch</span>
-              <strong>{snapshot.activeRun.branch ?? "—"}</strong>
+              <strong>{run.branch ?? "—"}</strong>
             </div>
             <div>
               <span className="muted-label">Worktree</span>
-              <strong title={snapshot.activeRun.worktreePath}>
-                {snapshot.activeRun.worktreePath ?? "—"}
+              <strong title={run.worktreePath}>
+                {run.worktreePath ?? "—"}
               </strong>
             </div>
             <div>
@@ -3301,24 +3334,63 @@ function ActiveRunsPage({
               <strong>{changedFiles.length}</strong>
             </div>
           </div>
-          {taskSnapshot && (
+          {run.taskId && (
             <div className="progress-overlay">
               <div className="panel-title">
                 <div>
-                  <span className="section-kicker">CODEX TASK</span>
-                  <h2>{taskSnapshot.taskId}</h2>
+                  <span className="section-kicker">CURRENT PHASE TURN</span>
+                  <h2>{run.currentPhase}</h2>
+                  <small className="muted-label">{run.taskId}</small>
                 </div>
-                <StatusBadge status={taskSnapshot.status} />
+                <StatusBadge status={taskSnapshot?.status ?? run.status} />
               </div>
-              {taskSnapshot.output && (
-                <pre className="task-output">{taskSnapshot.output}</pre>
+              {taskSnapshot?.error && (
+                <div className="run-task-error">
+                  <AlertTriangle size={16} />
+                  <span>{taskSnapshot.error}</span>
+                </div>
+              )}
+              <div className="live-output-heading">
+                <strong>Live model output</strong>
+                {!taskSnapshot && <Loader2 className="spin" size={15} />}
+              </div>
+              <pre className="task-output">
+                {taskSnapshot?.output ||
+                  (run.status === "in_progress"
+                    ? "Waiting for the model to begin responding…"
+                    : "No model response was captured for this phase.")}
+              </pre>
+              {(taskSnapshot?.activity?.length ?? 0) > 0 && (
+                <div className="task-activity" aria-label="Codex activity">
+                  {taskSnapshot!.activity!.map((item) => (
+                    <div className="check-row" key={item.id}>
+                      <StatusMark
+                        status={
+                          item.kind === "error"
+                            ? "blocked"
+                            : item.kind === "warning" || item.kind === "request"
+                              ? "warning"
+                              : (item.status ?? "in_progress")
+                        }
+                      />
+                      <span>{item.title}</span>
+                      <small>{item.detail || item.status || item.kind}</small>
+                    </div>
+                  ))}
+                </div>
               )}
               <small className="muted-label">
-                {taskSnapshot.events.length} execution events received
+                {taskSnapshot?.events.length ?? 0} execution events received
                 {attentionRequests > 0
                   ? ` · ${attentionRequests} operator attention request(s)`
                   : ""}
               </small>
+            </div>
+          )}
+          {pollError && (
+            <div className="run-task-error">
+              <AlertTriangle size={16} />
+              <span>{pollError}</span>
             </div>
           )}
           {changedFiles.length > 0 && (
@@ -3384,48 +3456,40 @@ function ActiveRunsPage({
             </div>
           )}
           <div className="detail-actions">
-            <button className="secondary-button">
-              <TerminalSquare size={15} />
-              Open task
-            </button>
-            <button
-              className="secondary-button"
-              onClick={() =>
-                void onRunControl(
-                  snapshot.activeRun!.runId,
-                  snapshot.activeRun!.status === "blocked" ? "resume" : "pause",
-                )
-              }
-            >
-              <Play size={15} />
-              {snapshot.activeRun.status === "blocked"
-                ? "Resume run"
-                : "Pause run"}
-            </button>
-            <button
-              className="reject-button"
-              onClick={() =>
-                void onRunControl(snapshot.activeRun!.runId, "cancel")
-              }
-            >
-              <X size={15} />
-              Cancel run
-            </button>
-            {snapshot.activeRun.status === "blocked" && (
+            {["ready", "in_progress", "blocked"].includes(run.status) && (
+              <button
+                className="secondary-button"
+                onClick={() =>
+                  void onRunControl(
+                    run.runId,
+                    run.status === "blocked" ? "resume" : "pause",
+                  )
+                }
+              >
+                <Play size={15} />
+                {run.status === "blocked" ? "Resume run" : "Pause run"}
+              </button>
+            )}
+            {["ready", "in_progress", "blocked"].includes(run.status) && (
+              <button
+                className="reject-button"
+                onClick={() => void onRunControl(run.runId, "cancel")}
+              >
+                <X size={15} />
+                Cancel run
+              </button>
+            )}
+            {["blocked", "failed"].includes(run.status) && (
               <>
                 <button
                   className="secondary-button"
-                  onClick={() =>
-                    void onRunControl(snapshot.activeRun!.runId, "retry")
-                  }
+                  onClick={() => void onRunControl(run.runId, "retry")}
                 >
                   Retry task
                 </button>
                 <button
                   className="secondary-button"
-                  onClick={() =>
-                    void onRunControl(snapshot.activeRun!.runId, "replan")
-                  }
+                  onClick={() => void onRunControl(run.runId, "replan")}
                 >
                   Request replan
                 </button>

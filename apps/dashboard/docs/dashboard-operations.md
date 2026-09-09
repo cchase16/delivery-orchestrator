@@ -31,6 +31,7 @@ $env:PRODUCT_REPOSITORY = 'C:\path\to\customer-odoo'
 $env:DASHBOARD_RUNTIME = 'C:\path\to\customer-odoo-delivery\.factory-local'
 $env:PORT = '4100'
 $env:LOG_LEVEL = 'info'
+$env:CODEX_EXECUTABLE = 'C:\path\to\codex.exe' # optional override
 ```
 
 For a production bundle:
@@ -79,6 +80,12 @@ criteria cannot be completed. **Retry task** resumes the first incomplete task
 in that phase. If the dashboard restarted and cannot reconnect to the old App
 Server session, retry starts a replacement Codex task with the same worktree
 and current-phase context.
+
+**Active Runs** refreshes the run and current App Server turn automatically. It
+shows the assigned phase, streamed model response, command and file activity,
+warnings, and the final App Server error when a turn fails. The most recent
+failed run remains visible with retry and replan controls after it stops being
+the active run.
 
 The next run plan starts automatically only after every phase and task in the
 current plan is `complete`, validation evidence bound to that package sequence
@@ -142,7 +149,11 @@ delivery repository.
 - **System plan is missing or invalid:** add a schema-valid artifact under the
   configured `system-plans/` directory; do not bypass preflight.
 - **Codex App Server unavailable:** verify `codex app-server --help` works in
-  the same PowerShell session, or select the fake adapter for fixture tests.
+  the same PowerShell session, or select the fake adapter for fixture tests. On
+  Windows the dashboard selects the newest executable found under the Codex
+  desktop installation and `PATH`; set `CODEX_EXECUTABLE` to force one exact
+  executable. Preflight uses App Server `model/list` and blocks a model or
+  reasoning level that the selected runtime does not advertise.
 - **A native-goal capability, feature, or `thread_goals` database error:**
   restart the dashboard from the current build. Run-plan execution uses stable
   App Server turns and dashboard-owned phase sequencing; it does not call the
