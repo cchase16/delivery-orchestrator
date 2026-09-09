@@ -138,6 +138,10 @@ delivery repository.
   configured `system-plans/` directory; do not bypass preflight.
 - **Codex App Server unavailable:** verify `codex app-server --help` works in
   the same PowerShell session, or select the fake adapter for fixture tests.
+- **`thread/goal/set requires experimentalApi capability`:** restart the
+  dashboard from the current build. The App Server adapter negotiates
+  `capabilities.experimentalApi` during initialization before creating a native
+  goal.
 - **A plan or package is stale:** refresh and create a new revision; immutable
   approvals are never overwritten.
 - **An artifact is rejected:** inspect the reason and create a reviewed

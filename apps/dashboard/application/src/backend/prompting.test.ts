@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import type { DashboardConfig } from "./config.js";
 import {
+  codexAppServerInitializeParams,
   FakeExecutionAdapter,
   PromptBuilder,
   resolveEffectiveProfile,
@@ -155,6 +156,12 @@ const executionProfile: PromptProfile = {
 };
 
 describe("PromptBuilder and execution adapters", () => {
+  it("negotiates the experimental App Server API required by native goals", () => {
+    expect(codexAppServerInitializeParams()).toMatchObject({
+      capabilities: { experimentalApi: true },
+    });
+  });
+
   it("resolves explicit overrides without falling back to unsupported settings", () => {
     const profile: PromptProfile = {
       ...generationProfile,

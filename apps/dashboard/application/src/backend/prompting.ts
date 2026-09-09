@@ -66,6 +66,19 @@ export const supportedReasoningEfforts: readonly ReasoningEffort[] = [
   "ultra",
 ];
 
+export function codexAppServerInitializeParams() {
+  return {
+    clientInfo: {
+      name: "factory-dashboard",
+      title: "Factory Dashboard",
+      version: "0.1.0",
+    },
+    capabilities: {
+      experimentalApi: true,
+    },
+  } as const;
+}
+
 export function resolveEffectiveProfile(
   profile: PromptProfile,
   overrides: Partial<Pick<PromptProfile, "model" | "reasoningEffort">>,
@@ -619,17 +632,7 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
     try {
       const initializeId = ++nextId;
       const initializeResponse = this.awaitResponse(lines, child, initializeId);
-      send(
-        "initialize",
-        {
-          clientInfo: {
-            name: "factory-dashboard",
-            title: "Factory Dashboard",
-            version: "0.1.0",
-          },
-        },
-        initializeId,
-      );
+      send("initialize", codexAppServerInitializeParams(), initializeId);
       await initializeResponse;
       send("initialized", {});
       const threadIdRequest = ++nextId;
