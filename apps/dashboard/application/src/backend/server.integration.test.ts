@@ -315,12 +315,42 @@ Complete only after all checks pass.
       }),
     });
     expect(approvedPlan.response.ok).toBe(true);
+    const followUpMarkdown = markdown
+      .replace("# Integration run plan", "# Integration follow-up run plan")
+      .replaceAll("PH-01", "PH-02")
+      .replaceAll("TASK-01-01", "TASK-02-01")
+      .replace("Implement the menu.", "Harden the menu.");
+    const followUpPlanDraft = await request(port, "/api/run-plans/drafts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        requirementId: requirementArtifact.id,
+        markdown: followUpMarkdown,
+      }),
+    });
+    expect(followUpPlanDraft.response.ok).toBe(true);
+    const followUpPlan = followUpPlanDraft.value;
+    const approvedFollowUpPlan = await request(port, "/api/decisions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        artifactId: followUpPlan.id,
+        kind: "run_plan",
+        decision: "approved",
+        revision: followUpPlan.revision,
+        digest: followUpPlan.digest,
+      }),
+    });
+    expect(approvedFollowUpPlan.response.ok).toBe(true);
     const packageDraft = await request(port, "/api/work-packages/drafts", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        members: [{ runPlanId: plan.id, sequence: 1 }],
-        rationale: "Single-plan integration package",
+        members: [
+          { runPlanId: plan.id, sequence: 1 },
+          { runPlanId: followUpPlan.id, sequence: 2 },
+        ],
+        rationale: "Two-plan integration package",
       }),
     });
     expect(packageDraft.response.ok).toBe(true);
@@ -500,6 +530,43 @@ Complete only after all checks pass.
         criteria: [expect.objectContaining({ status: "verified" })],
       }),
     });
+    const prematureDisposition = await request(
+      port,
+      "/api/validation/disposition",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          runId: started.value.runId,
+          decision: "accepted",
+          evidenceIds: [evidence.value.evidenceId],
+          reason: "This must remain blocked while execution is incomplete.",
+        }),
+      },
+    );
+    expect(prematureDisposition.response.status).toBe(409);
+    expect(prematureDisposition.value.error).toContain(
+      "current run plan is not complete",
+    );
+    const completedProgress = await request(
+      port,
+      `/api/runs/${encodeURIComponent(started.value.runId)}/progress`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          work_package_id: packageArtifact.id,
+          run_plan_id: plan.id,
+          run_plan_revision: plan.revision,
+          status: "complete",
+          current_phase_id: "PH-01",
+          current_task_id: "TASK-01-01",
+          phases: [{ phase_id: "PH-01", status: "complete" }],
+          tasks: [{ task_id: "TASK-01-01", status: "complete" }],
+        }),
+      },
+    );
+    expect(completedProgress.response.ok).toBe(true);
     const disposition = await request(port, "/api/validation/disposition", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -511,6 +578,85 @@ Complete only after all checks pass.
       }),
     });
     expect(disposition.response.ok).toBe(true);
+    const advanced = await request(port, "/api/snapshot");
+    expect(advanced.value.activeRun).toMatchObject({
+      runId: started.value.runId,
+      sequence: 2,
+      total: 2,
+      status: "in_progress",
+    });
+    expect(advanced.value.runtimeActions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          actionType: "implementation_task_started",
+          payload: expect.objectContaining({ runPlanId: followUpPlan.id }),
+        }),
+      ]),
+    );
+    const secondProgress = await request(
+      port,
+      `/api/runs/${encodeURIComponent(started.value.runId)}/progress`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          work_package_id: packageArtifact.id,
+          run_plan_id: followUpPlan.id,
+          run_plan_revision: followUpPlan.revision,
+          status: "complete",
+          current_phase_id: "PH-02",
+          current_task_id: "TASK-02-01",
+          phases: [{ phase_id: "PH-02", status: "complete" }],
+          tasks: [{ task_id: "TASK-02-01", status: "complete" }],
+        }),
+      },
+    );
+    expect(secondProgress.response.ok).toBe(true);
+    const staleEvidenceDisposition = await request(
+      port,
+      "/api/validation/disposition",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          runId: started.value.runId,
+          decision: "accepted",
+          evidenceIds: [evidence.value.evidenceId],
+          reason: "Sequence-one evidence must not validate sequence two.",
+        }),
+      },
+    );
+    expect(staleEvidenceDisposition.response.status).toBe(409);
+    expect(staleEvidenceDisposition.value.error).toContain(
+      "passed validation evidence manifest",
+    );
+    const secondEvidence = await request(port, "/api/validation/evidence", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        runId: started.value.runId,
+        baseCommit: baseline,
+        allowedPaths: ["addons/**"],
+        forbiddenPaths: ["delivery/**"],
+      }),
+    });
+    expect(secondEvidence.response.ok).toBe(true);
+    expect(secondEvidence.value.outcome).toBe("passed");
+    const finalDisposition = await request(
+      port,
+      "/api/validation/disposition",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          runId: started.value.runId,
+          decision: "accepted",
+          evidenceIds: [secondEvidence.value.evidenceId],
+          reason: "Follow-up validation passed.",
+        }),
+      },
+    );
+    expect(finalDisposition.response.ok).toBe(true);
     const completed = await request(port, "/api/snapshot");
     expect(completed.value.activeRun).toBeNull();
     expect(completed.value.dispositions).toEqual(

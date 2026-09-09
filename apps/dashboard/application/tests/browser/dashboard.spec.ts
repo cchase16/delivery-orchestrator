@@ -1132,6 +1132,104 @@ test("approved work-package member shows its current approval state", async ({
   ).toHaveCount(0);
 });
 
+test("active run shows validated phase and task progress", async ({ page }) => {
+  const browserErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") browserErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => browserErrors.push(error.message));
+  const snapshot = {
+    generatedAt: "2026-09-09T12:00:00.000Z",
+    system: {
+      id: "test-system",
+      name: "Test system",
+      branch: "main",
+      deliveryPath: "delivery",
+      lockStatus: "resolved",
+    },
+    health: [],
+    artifacts: [],
+    approvals: [],
+    activeRun: {
+      runId: "RUN-BROWSER-001",
+      workPackageId: "WP-BROWSER-001",
+      title: "Two-plan implementation",
+      startedAt: "2026-09-09T11:55:00.000Z",
+      sequence: 1,
+      total: 2,
+      currentPhase: "PH-01 · Foundation",
+      currentTask: "TASK-01 · Build foundation",
+      progress: 25,
+      status: "in_progress",
+      model: "gpt-5.6-luna",
+      reasoningEffort: "high",
+      adapter: "fake",
+      taskId: "TASK-FAKE-1",
+    },
+    promptProfiles: [],
+    blockers: [],
+    validationErrors: [],
+  };
+  await page.route("**/api/snapshot", async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(snapshot),
+    }),
+  );
+  await page.route("**/api/runs/RUN-BROWSER-001/progress", async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        schema_version: 1,
+        run_id: "RUN-BROWSER-001",
+        work_package_id: "WP-BROWSER-001",
+        run_plan_id: "RP-BROWSER-001",
+        run_plan_revision: 1,
+        status: "in_progress",
+        current_phase_id: "PH-01",
+        current_task_id: "TASK-02",
+        phases: [
+          { phase_id: "PH-01", status: "in_progress", note: "Building" },
+          { phase_id: "PH-02", status: "not_started" },
+        ],
+        tasks: [
+          { task_id: "TASK-01", status: "complete" },
+          { task_id: "TASK-02", status: "in_progress", note: "Testing" },
+        ],
+      }),
+    }),
+  );
+  await page.route("**/api/prompt-tasks/TASK-FAKE-1", async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        taskId: "TASK-FAKE-1",
+        status: "running",
+        output: "Implementing TASK-02",
+        events: [],
+      }),
+    }),
+  );
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Active Runs", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Phase and task progress" }),
+  ).toBeVisible();
+  await expect(page.getByText("PH-01", { exact: true })).toBeVisible();
+  await expect(page.getByText("Phase · in progress · Building")).toBeVisible();
+  await expect(page.getByText("TASK-02", { exact: true })).toBeVisible();
+  await expect(page.getByText("in progress · Testing")).toBeVisible();
+  await page.screenshot({
+    path: "test-results/execution-progress-overlay.png",
+    fullPage: true,
+  });
+  expect(browserErrors).toEqual([]);
+});
+
 test("operator can manually resolve the delivery lock from Validation", async ({
   page,
 }) => {

@@ -41,10 +41,29 @@
     },
     "current_phase_id": { "type": "string", "minLength": 1, "maxLength": 200 },
     "current_task_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "phases": { "type": "array", "items": { "$ref": "#/$defs/phase" } },
     "tasks": { "type": "array", "items": { "$ref": "#/$defs/task" } },
     "updated_at": { "type": "string", "format": "date-time" }
   },
   "$defs": {
+    "phase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phase_id", "status"],
+      "properties": {
+        "phase_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "status": {
+          "enum": [
+            "not_started",
+            "in_progress",
+            "blocked",
+            "complete",
+            "deferred"
+          ]
+        },
+        "note": { "type": "string", "maxLength": 4000 }
+      }
+    },
     "task": {
       "type": "object",
       "additionalProperties": false,

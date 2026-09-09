@@ -3361,11 +3361,24 @@ function ActiveRunsPage({
                 </div>
                 <StatusBadge status={progress.status} />
               </div>
+              {progress.phases?.map((phase) => (
+                <div className="check-row" key={phase.phase_id}>
+                  <StatusMark status={phase.status} />
+                  <strong>{phase.phase_id}</strong>
+                  <small>
+                    Phase · {phase.status.replaceAll("_", " ")}
+                    {phase.note ? ` · ${phase.note}` : ""}
+                  </small>
+                </div>
+              ))}
               {progress.tasks.map((task) => (
                 <div className="check-row" key={task.task_id}>
                   <StatusMark status={task.status} />
                   <span>{task.task_id}</span>
-                  <small>{task.status.replaceAll("_", " ")}</small>
+                  <small>
+                    {task.status.replaceAll("_", " ")}
+                    {task.note ? ` · ${task.note}` : ""}
+                  </small>
                 </div>
               ))}
             </div>

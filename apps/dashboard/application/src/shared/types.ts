@@ -71,6 +71,7 @@ export interface PromptPacket {
     path: string;
     digest: string;
   }>;
+  goal?: string;
   prompt: string;
   executionContext?: {
     cwd: string;
@@ -201,6 +202,11 @@ export interface ExecutionProgress {
     "ready" | "in_progress" | "blocked" | "complete" | "failed" | "cancelled";
   current_phase_id?: string;
   current_task_id?: string;
+  phases?: Array<{
+    phase_id: string;
+    status: "not_started" | "in_progress" | "blocked" | "complete" | "deferred";
+    note?: string;
+  }>;
   tasks: Array<{
     task_id: string;
     status: "not_started" | "in_progress" | "blocked" | "complete" | "deferred";
@@ -229,6 +235,7 @@ export interface ActiveRun {
   baseCommit?: string;
   branch?: string;
   worktreePath?: string;
+  acceptedSequence?: number;
 }
 
 export interface PreflightResult {

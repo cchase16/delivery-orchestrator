@@ -1793,6 +1793,24 @@ export class DeliveryRepository {
     const startedAt = new Date().toISOString();
     const run = this.state.getRun(input.runId);
     const worktreeRoot = run?.worktreePath ?? this.config.productRepository;
+    let evidencePlan:
+      { sequence: number; runPlanId: string; revision: number } | undefined;
+    if (run) {
+      try {
+        const packageDocument = await this.readArtifact(run.workPackageId);
+        const members = JSON.parse(packageDocument?.content ?? "").members as
+          Array<{ run_plan_id?: string; revision?: number }> | undefined;
+        const member = members?.[Math.max(0, run.sequence - 1)];
+        if (member?.run_plan_id && member.revision)
+          evidencePlan = {
+            sequence: run.sequence,
+            runPlanId: member.run_plan_id,
+            revision: member.revision,
+          };
+      } catch {
+        /* Legacy and fixture runs may not have a readable package artifact. */
+      }
+    }
     const diff = await reviewProductDiff(
       this.config,
       input.baseCommit,
@@ -2001,6 +2019,13 @@ export class DeliveryRepository {
       schema_version: 1,
       evidence_id: evidenceId,
       run_id: input.runId,
+      ...(evidencePlan
+        ? {
+            sequence: evidencePlan.sequence,
+            run_plan_id: evidencePlan.runPlanId,
+            run_plan_revision: evidencePlan.revision,
+          }
+        : {}),
       outcome,
       checks,
       result_commit:
@@ -2068,6 +2093,45 @@ export class DeliveryRepository {
       throw new Error(
         "Execution progress must target the exact approved run-plan revision.",
       );
+    const structure = await this.readExecutionPlanStructure(plan);
+    const expectedPhaseIds = structure.phases.map((phase) => phase.phaseId);
+    const expectedTaskIds = structure.phases.flatMap((phase) =>
+      phase.tasks.map((task) => task.taskId),
+    );
+    const receivedTaskIds = input.tasks.map((task) => task.task_id);
+    if (
+      new Set(receivedTaskIds).size !== receivedTaskIds.length ||
+      expectedTaskIds.length !== receivedTaskIds.length ||
+      expectedTaskIds.some((taskId) => !receivedTaskIds.includes(taskId))
+    )
+      throw new Error(
+        "Execution progress task identifiers must exactly match the approved run-plan sidecar.",
+      );
+    if (input.phases) {
+      const receivedPhaseIds = input.phases.map((phase) => phase.phase_id);
+      if (
+        new Set(receivedPhaseIds).size !== receivedPhaseIds.length ||
+        expectedPhaseIds.length !== receivedPhaseIds.length ||
+        expectedPhaseIds.some((phaseId) => !receivedPhaseIds.includes(phaseId))
+      )
+        throw new Error(
+          "Execution progress phase identifiers must exactly match the approved run-plan sidecar.",
+        );
+    }
+    if (
+      input.current_phase_id &&
+      !expectedPhaseIds.includes(input.current_phase_id)
+    )
+      throw new Error(
+        "The current execution phase is not in the approved run plan.",
+      );
+    if (
+      input.current_task_id &&
+      !expectedTaskIds.includes(input.current_task_id)
+    )
+      throw new Error(
+        "The current execution task is not in the approved run plan.",
+      );
     const progress: ExecutionProgress = {
       schema_version: 1,
       ...input,
@@ -2091,16 +2155,34 @@ export class DeliveryRepository {
       progressPath,
       JSON.stringify(progress, null, 2) + "\n",
     );
+    const progressInputPath = path.join(
+      this.config.runtimeDirectory,
+      "progress-input",
+      input.run_id,
+      "progress.json",
+    );
+    await fs.mkdir(path.dirname(progressInputPath), { recursive: true });
+    await fs.writeFile(
+      progressInputPath,
+      JSON.stringify(progress, null, 2) + "\n",
+      "utf8",
+    );
     const run = this.state.getActiveRun();
     if (run?.runId === input.run_id) {
+      const planFraction =
+        input.tasks.filter((task) => task.status === "complete").length /
+        Math.max(1, input.tasks.length);
       this.updateRun(input.run_id, {
-        status: input.status,
+        status:
+          input.status === "blocked" || input.status === "failed"
+            ? input.status
+            : input.status === "cancelled"
+              ? "cancelled"
+              : "in_progress",
         currentPhase: input.current_phase_id ?? run.currentPhase,
         currentTask: input.current_task_id ?? run.currentTask,
         progress: Math.round(
-          (input.tasks.filter((task) => task.status === "complete").length /
-            Math.max(1, input.tasks.length)) *
-            100,
+          ((run.sequence - 1 + planFraction) / Math.max(1, run.total)) * 100,
         ),
       });
     }
@@ -2110,6 +2192,218 @@ export class DeliveryRepository {
       `progress:${input.run_id}:${input.run_plan_id}:${progress.updated_at}`,
     );
     return progress;
+  }
+
+  private async readExecutionPlanStructure(plan: ArtifactSummary): Promise<{
+    phases: Array<{
+      phaseId: string;
+      title: string;
+      tasks: Array<{ taskId: string; title: string }>;
+    }>;
+  }> {
+    const sidecarPath = await resolveDeliveryFile(
+      this.config.deliveryRepository,
+      path.join(
+        path.dirname(plan.path),
+        `${path.basename(plan.path, path.extname(plan.path))}.sidecar.json`,
+      ),
+    );
+    let value: Record<string, unknown>;
+    try {
+      value = JSON.parse(await fs.readFile(sidecarPath, "utf8")) as Record<
+        string,
+        unknown
+      >;
+    } catch {
+      throw new Error(
+        "The approved run plan sidecar is unavailable or invalid.",
+      );
+    }
+    const phases = Array.isArray(value.phases)
+      ? value.phases.map((phaseValue) => {
+          const phase = phaseValue as Record<string, unknown>;
+          const tasks = Array.isArray(phase.tasks)
+            ? phase.tasks.map((taskValue) => {
+                const task = taskValue as Record<string, unknown>;
+                return {
+                  taskId: String(task.task_id ?? ""),
+                  title: String(task.title ?? ""),
+                };
+              })
+            : [];
+          return {
+            phaseId: String(phase.phase_id ?? ""),
+            title: String(phase.title ?? ""),
+            tasks,
+          };
+        })
+      : [];
+    if (
+      !phases.length ||
+      phases.some(
+        (phase) =>
+          !phase.phaseId ||
+          !phase.title ||
+          !phase.tasks.length ||
+          phase.tasks.some((task) => !task.taskId || !task.title),
+      )
+    )
+      throw new Error(
+        "The approved run plan has no executable phase/task index.",
+      );
+    return { phases };
+  }
+
+  async prepareExecutionProgress(input: {
+    runId: string;
+    workPackageId: string;
+    runPlanId: string;
+  }): Promise<{
+    progress: ExecutionProgress;
+    progressFilePath: string;
+    planPath: string;
+    firstPhaseId: string;
+    firstPhaseTitle: string;
+    firstTaskId: string;
+    firstTaskTitle: string;
+  }> {
+    const snapshot = await this.snapshot();
+    const plan = snapshot.artifacts.find(
+      (artifact) =>
+        artifact.id === input.runPlanId &&
+        artifact.kind === "run_plan" &&
+        artifact.status === "approved",
+    );
+    if (!plan)
+      throw new Error(`Approved run plan not found: ${input.runPlanId}`);
+    const structure = await this.readExecutionPlanStructure(plan);
+    const firstPhase = structure.phases[0];
+    const firstTask = firstPhase.tasks[0];
+    const progress: ExecutionProgress = {
+      schema_version: 1,
+      run_id: input.runId,
+      work_package_id: input.workPackageId,
+      run_plan_id: plan.id,
+      run_plan_revision: plan.revision,
+      status: "in_progress",
+      current_phase_id: firstPhase.phaseId,
+      current_task_id: firstTask.taskId,
+      phases: structure.phases.map((phase, index) => ({
+        phase_id: phase.phaseId,
+        status: index === 0 ? "in_progress" : "not_started",
+      })),
+      tasks: structure.phases.flatMap((phase, phaseIndex) =>
+        phase.tasks.map((task, taskIndex) => ({
+          task_id: task.taskId,
+          status:
+            phaseIndex === 0 && taskIndex === 0
+              ? ("in_progress" as const)
+              : ("not_started" as const),
+        })),
+      ),
+      updated_at: new Date().toISOString(),
+    };
+    const progressDirectory = path.join(
+      this.config.runtimeDirectory,
+      "progress-input",
+      input.runId,
+    );
+    const progressFilePath = path.join(progressDirectory, "progress.json");
+    await fs.mkdir(progressDirectory, { recursive: true });
+    await fs.writeFile(
+      progressFilePath,
+      JSON.stringify(progress, null, 2) + "\n",
+      "utf8",
+    );
+    return {
+      progress,
+      progressFilePath,
+      planPath: path.resolve(this.config.deliveryRepository, plan.path),
+      firstPhaseId: firstPhase.phaseId,
+      firstPhaseTitle: firstPhase.title,
+      firstTaskId: firstTask.taskId,
+      firstTaskTitle: firstTask.title,
+    };
+  }
+
+  async syncExecutionProgress(
+    runId: string,
+  ): Promise<ExecutionProgress | null> {
+    const progressFilePath = path.join(
+      this.config.runtimeDirectory,
+      "progress-input",
+      runId,
+      "progress.json",
+    );
+    let candidate: ExecutionProgress;
+    try {
+      candidate = JSON.parse(
+        await fs.readFile(progressFilePath, "utf8"),
+      ) as ExecutionProgress;
+    } catch (cause) {
+      if (!(await exists(progressFilePath)))
+        return this.readExecutionProgress(runId);
+      throw new Error(
+        `Execution progress file is not valid JSON: ${cause instanceof Error ? cause.message : String(cause)}`,
+      );
+    }
+    if (candidate.run_id !== runId)
+      throw new Error(
+        "Execution progress file run_id does not match this run.",
+      );
+    const input = { ...candidate } as Partial<ExecutionProgress>;
+    delete input.schema_version;
+    delete input.updated_at;
+    const current = await this.readExecutionProgress(runId);
+    const comparable = (value: ExecutionProgress | typeof input) => {
+      const copy = { ...value } as Partial<ExecutionProgress>;
+      delete copy.schema_version;
+      delete copy.updated_at;
+      return JSON.stringify(copy);
+    };
+    if (current && comparable(current) === comparable(input)) return current;
+    return this.saveExecutionProgress(
+      input as Omit<ExecutionProgress, "schema_version" | "updated_at">,
+    );
+  }
+
+  async executionProgressGate(runId: string): Promise<{
+    ready: boolean;
+    reasons: string[];
+  }> {
+    const run = this.state.getRun(runId);
+    if (!run) return { ready: false, reasons: [`Run not found: ${runId}`] };
+    const progress = await this.syncExecutionProgress(runId);
+    if (!progress)
+      return { ready: false, reasons: ["Execution progress is missing."] };
+    const reasons: string[] = [];
+    if (progress.work_package_id !== run.workPackageId)
+      reasons.push("Execution progress targets a different work package.");
+    try {
+      const packageDocument = await this.readArtifact(run.workPackageId);
+      const members = JSON.parse(packageDocument?.content ?? "").members as
+        Array<{ run_plan_id?: string; revision?: number }> | undefined;
+      const currentMember = members?.[Math.max(0, run.sequence - 1)];
+      if (
+        !currentMember?.run_plan_id ||
+        progress.run_plan_id !== currentMember.run_plan_id ||
+        progress.run_plan_revision !== currentMember.revision
+      )
+        reasons.push(
+          "Execution progress does not target the current sequenced run-plan revision.",
+        );
+    } catch {
+      reasons.push("The current work-package sequence could not be read.");
+    }
+    if (progress.status !== "complete")
+      reasons.push(`Execution status is ${progress.status}, not complete.`);
+    if (!progress.phases?.length)
+      reasons.push("Phase statuses are missing from execution progress.");
+    else if (progress.phases.some((phase) => phase.status !== "complete"))
+      reasons.push("Every phase must be complete.");
+    if (progress.tasks.some((task) => task.status !== "complete"))
+      reasons.push("Every task must be complete.");
+    return { ready: reasons.length === 0, reasons };
   }
 
   async readExecutionProgress(
@@ -2133,6 +2427,11 @@ export class DeliveryRepository {
     runId: string,
     evidenceIds?: readonly string[],
     requirePassed = true,
+    expectedPlan?: {
+      sequence: number;
+      runPlanId: string;
+      runPlanRevision: number;
+    },
   ): Promise<boolean> {
     const evidenceDirectory = await this.configuredEvidenceDirectory();
     const files = (
@@ -2150,6 +2449,13 @@ export class DeliveryRepository {
         if (value.run_id !== runId) continue;
         const evidenceId = String(value.evidence_id ?? path.basename(file));
         if (requestedIds && !requestedIds.has(evidenceId)) continue;
+        if (
+          expectedPlan &&
+          (value.sequence !== expectedPlan.sequence ||
+            value.run_plan_id !== expectedPlan.runPlanId ||
+            value.run_plan_revision !== expectedPlan.runPlanRevision)
+        )
+          continue;
         matchedIds.add(evidenceId);
         if (value.outcome === "passed") passed = true;
       } catch {
@@ -2535,11 +2841,27 @@ export class DeliveryRepository {
     const evidenceIds = [...new Set(input.evidenceIds)].sort();
     const requiresPassedEvidence =
       input.decision === "accepted" || input.decision === "exception_accepted";
+    let acceptedProgress: ExecutionProgress | null = null;
+    if (requiresPassedEvidence) {
+      const progressGate = await this.executionProgressGate(input.runId);
+      if (!progressGate.ready)
+        throw new Error(
+          `The current run plan is not complete: ${progressGate.reasons.join(" ")}`,
+        );
+      acceptedProgress = await this.readExecutionProgress(input.runId);
+    }
     if (
       !(await this.hasPassedValidationEvidence(
         input.runId,
         evidenceIds,
         requiresPassedEvidence,
+        requiresPassedEvidence && acceptedProgress
+          ? {
+              sequence: run.sequence,
+              runPlanId: acceptedProgress.run_plan_id,
+              runPlanRevision: acceptedProgress.run_plan_revision,
+            }
+          : undefined,
       ))
     )
       throw new Error(
@@ -2630,12 +2952,14 @@ export class DeliveryRepository {
       if (run.sequence < run.total)
         this.updateRun(input.runId, {
           status: "blocked",
+          acceptedSequence: run.sequence,
           progress: Math.round((run.sequence / run.total) * 100),
-          currentTask: `Sequence ${run.sequence} accepted; resume to start sequence ${run.sequence + 1}`,
+          currentTask: `Sequence ${run.sequence} accepted; starting sequence ${run.sequence + 1}`,
         });
       else
         this.updateRun(input.runId, {
           status: "complete",
+          acceptedSequence: run.sequence,
           progress: 100,
           currentTask: "Result accepted; ready for release review",
         });

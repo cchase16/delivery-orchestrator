@@ -151,14 +151,26 @@ async function readOnlyRepositoryRoots(): Promise<string[]> {
   return roots;
 }
 
-function implementationWritableRoots(worktreePath: string): string[] {
-  return [worktreePath, path.join(config.productRepository, ".git")];
+function implementationWritableRoots(
+  worktreePath: string,
+  progressFilePath: string,
+): string[] {
+  return [
+    worktreePath,
+    path.join(config.productRepository, ".git"),
+    path.dirname(progressFilePath),
+  ];
 }
 
 async function dispatchNextImplementationTask(
   run: ActiveRun,
   runPlanId: string,
-): Promise<{ taskId: string; adapter: string }> {
+): Promise<{
+  taskId: string;
+  adapter: string;
+  phaseLabel: string;
+  taskLabel: string;
+}> {
   const profile = state
     .getPromptProfiles()
     .find((candidate) => candidate.taskType === "run_plan_execution");
@@ -166,6 +178,11 @@ async function dispatchNextImplementationTask(
     throw new Error("Run-plan execution profile is not configured.");
   if (!run.worktreePath || !run.baseCommit || !run.branch)
     throw new Error("Run did not receive an isolated product worktree.");
+  const execution = await repository.prepareExecutionProgress({
+    runId: run.runId,
+    workPackageId: run.workPackageId,
+    runPlanId,
+  });
   const packet = await promptBuilder.preview(
     "run_plan_execution",
     [runPlanId],
@@ -174,10 +191,23 @@ async function dispatchNextImplementationTask(
       model: run.model,
       reasoningEffort: run.reasoningEffort,
     },
+    {
+      runId: run.runId,
+      workPackageId: run.workPackageId,
+      planPath: execution.planPath,
+      progressFilePath: execution.progressFilePath,
+      firstPhaseId: execution.firstPhaseId,
+      firstPhaseTitle: execution.firstPhaseTitle,
+      firstTaskId: execution.firstTaskId,
+      firstTaskTitle: execution.firstTaskTitle,
+    },
   );
   packet.executionContext = {
     cwd: run.worktreePath,
-    writableRoots: implementationWritableRoots(run.worktreePath),
+    writableRoots: implementationWritableRoots(
+      run.worktreePath,
+      execution.progressFilePath,
+    ),
     readOnlyRoots: await readOnlyRepositoryRoots(),
   };
   const adapterId = run.adapter ?? profile.adapter ?? "codex_app_server";
@@ -186,6 +216,17 @@ async function dispatchNextImplementationTask(
   const capability = await adapter.probe();
   if (!capability.available) throw new Error(capability.detail);
   const task = await adapter.start(packet);
+  await repository.saveExecutionProgress({
+    run_id: execution.progress.run_id,
+    work_package_id: execution.progress.work_package_id,
+    run_plan_id: execution.progress.run_plan_id,
+    run_plan_revision: execution.progress.run_plan_revision,
+    status: execution.progress.status,
+    current_phase_id: execution.progress.current_phase_id,
+    current_task_id: execution.progress.current_task_id,
+    phases: execution.progress.phases,
+    tasks: execution.progress.tasks,
+  });
   state.recordAction(
     "implementation_task_started",
     {
@@ -203,7 +244,49 @@ async function dispatchNextImplementationTask(
     },
     `implementation-task:${run.runId}:${runPlanId}`,
   );
-  return { taskId: task.taskId, adapter: adapterId };
+  return {
+    taskId: task.taskId,
+    adapter: adapterId,
+    phaseLabel: `${execution.firstPhaseId} · ${execution.firstPhaseTitle}`,
+    taskLabel: `${execution.firstTaskId} · ${execution.firstTaskTitle}`,
+  };
+}
+
+async function packageRunPlanId(
+  run: ActiveRun,
+  zeroBasedIndex: number,
+): Promise<string | undefined> {
+  const packageDocument = await repository.readArtifact(run.workPackageId);
+  const members = JSON.parse(packageDocument?.content ?? "").members as
+    Array<{ run_plan_id?: string }> | undefined;
+  return members?.[zeroBasedIndex]?.run_plan_id;
+}
+
+async function advanceAcceptedRun(run: ActiveRun): Promise<ActiveRun> {
+  if (run.acceptedSequence !== run.sequence)
+    throw new Error(
+      "Resume blocked: the current run-plan result has not been accepted.",
+    );
+  const progressGate = await repository.executionProgressGate(run.runId);
+  if (!progressGate.ready)
+    throw new Error(`Resume blocked: ${progressGate.reasons.join(" ")}`);
+  const nextPlanId = await packageRunPlanId(run, run.sequence);
+  if (!nextPlanId)
+    return repository.updateRun(run.runId, {
+      status: "complete",
+      progress: 100,
+      currentTask: "Validation accepted; work package complete",
+    });
+  const nextTask = await dispatchNextImplementationTask(run, nextPlanId);
+  return repository.updateRun(run.runId, {
+    status: "in_progress",
+    sequence: run.sequence + 1,
+    progress: Math.round((run.sequence / run.total) * 100),
+    currentPhase: nextTask.phaseLabel,
+    currentTask: `${nextTask.taskLabel} · Codex task ${nextTask.taskId}`,
+    taskId: nextTask.taskId,
+    adapter: nextTask.adapter,
+  });
 }
 
 app.get("/api/health", async () => ({
@@ -355,7 +438,38 @@ app.post<{
   };
 }>("/api/validation/disposition", async (request, reply) => {
   try {
-    return await repository.recordResultDisposition(request.body);
+    const run = repository.getRun(request.body.runId);
+    if (!run) throw new Error(`Run not found: ${request.body.runId}`);
+    const accepted =
+      request.body.decision === "accepted" ||
+      request.body.decision === "exception_accepted";
+    if (accepted && run.taskId) {
+      const adapter =
+        adapters[run.adapter as keyof typeof adapters] ??
+        adapters.codex_app_server;
+      const task = await adapter.read?.(run.taskId);
+      const taskStatus = task?.status.toLowerCase() ?? "unknown";
+      if (
+        taskStatus !== "unknown" &&
+        !["completed", "complete", "succeeded"].includes(taskStatus)
+      )
+        throw new Error(
+          "The current Codex task must finish before its result can be accepted.",
+        );
+    }
+    const disposition = await repository.recordResultDisposition(request.body);
+    const acceptedRun = repository.getRun(request.body.runId);
+    if (accepted && acceptedRun && acceptedRun.sequence < acceptedRun.total) {
+      try {
+        await advanceAcceptedRun(acceptedRun);
+      } catch (cause) {
+        repository.updateRun(acceptedRun.runId, {
+          status: "blocked",
+          currentTask: `Sequence ${acceptedRun.sequence} accepted; next sequence could not start: ${cause instanceof Error ? cause.message : String(cause)}`,
+        });
+      }
+    }
+    return disposition;
   } catch (cause) {
     return reply.code(409).send({
       error:
@@ -922,66 +1036,16 @@ app.post<{
   try {
     const run = await repository.startRun(request.body);
     startedRunId = run.runId;
-    const profile = state
-      .getPromptProfiles()
-      .find((candidate) => candidate.taskType === "run_plan_execution");
-    if (!profile)
-      throw new Error("Run-plan execution profile is not configured.");
-    const packageDocument = await repository.readArtifact(run.workPackageId);
-    const packageValue = JSON.parse(packageDocument?.content ?? "") as {
-      members?: Array<{ run_plan_id?: string }>;
-    };
-    const firstRunPlanId = packageValue.members?.[0]?.run_plan_id;
+    const firstRunPlanId = await packageRunPlanId(run, 0);
     if (!firstRunPlanId)
       throw new Error("Approved work package has no executable run plan.");
-    const packet = await promptBuilder.preview(
-      "run_plan_execution",
-      [firstRunPlanId],
-      {
-        ...profile,
-        model: request.body.model,
-        reasoningEffort: request.body.reasoningEffort,
-      },
-    );
-    if (!run.worktreePath || !run.baseCommit || !run.branch)
-      throw new Error("Run did not receive an isolated product worktree.");
-    packet.executionContext = {
-      cwd: run.worktreePath,
-      writableRoots: implementationWritableRoots(run.worktreePath),
-      readOnlyRoots: [...(await readOnlyRepositoryRoots())],
-    };
-    const adapterId =
-      request.body.adapter ?? profile.adapter ?? "codex_app_server";
-    if (adapterId === "manual_codex")
-      throw new Error("Manual Codex tasks require a reviewed task packet.");
-    const adapter = adapters[adapterId];
-    if (!adapter) throw new Error(`Unknown adapter: ${adapterId}`);
-    const capability = await adapter.probe();
-    if (!capability.available) throw new Error(capability.detail);
-    const task = await adapter.start(packet);
-    state.recordAction(
-      "implementation_task_started",
-      {
-        runId: run.runId,
-        taskId: task.taskId,
-        runPlanId: firstRunPlanId,
-        promptMode: packet.promptMode,
-        executionContext: packet.executionContext,
-        requested: {
-          model: packet.model,
-          reasoningEffort: packet.reasoningEffort,
-          adapter: adapterId,
-        },
-        actual: task,
-      },
-      `implementation-task:${run.runId}:${firstRunPlanId}`,
-    );
+    const task = await dispatchNextImplementationTask(run, firstRunPlanId);
     return repository.updateRun(run.runId, {
       status: "in_progress",
-      currentPhase: "Phase 1 · Implementation",
-      currentTask: `Codex task ${task.taskId}`,
+      currentPhase: task.phaseLabel,
+      currentTask: `${task.taskLabel} · Codex task ${task.taskId}`,
       taskId: task.taskId,
-      adapter: adapterId,
+      adapter: task.adapter,
     });
   } catch (cause) {
     if (startedRunId) {
@@ -1071,13 +1135,10 @@ app.post<{
       await adapter.interrupt?.(activeRun.taskId);
     }
     if (request.body?.action === "retry") {
-      const packageDocument = await repository.readArtifact(
-        activeRun.workPackageId,
+      const currentPlanId = await packageRunPlanId(
+        activeRun,
+        Math.max(0, activeRun.sequence - 1),
       );
-      const members = JSON.parse(packageDocument?.content ?? "").members as
-        Array<{ run_plan_id?: string }> | undefined;
-      const currentPlanId =
-        members?.[Math.max(0, activeRun.sequence - 1)]?.run_plan_id;
       if (!currentPlanId) throw new Error("Run package has no retryable plan.");
       const nextTask = await dispatchNextImplementationTask(
         activeRun,
@@ -1085,7 +1146,9 @@ app.post<{
       );
       return repository.updateRun(activeRun.runId, {
         status: "in_progress",
-        currentTask: `Codex task ${nextTask.taskId}`,
+        acceptedSequence: undefined,
+        currentPhase: nextTask.phaseLabel,
+        currentTask: `${nextTask.taskLabel} · Codex task ${nextTask.taskId}`,
         taskId: nextTask.taskId,
         adapter: nextTask.adapter,
       });
@@ -1107,35 +1170,7 @@ app.post<{
         taskSnapshot?.status.toLowerCase() ?? "",
       );
       if (taskCompleted) {
-        if (!(await repository.hasPassedValidationEvidence(activeRun.runId)))
-          throw new Error(
-            "Resume blocked: a passed validation evidence manifest is required before the next run plan can start.",
-          );
-        const packageDocument = await repository.readArtifact(
-          activeRun.workPackageId,
-        );
-        const members = JSON.parse(packageDocument?.content ?? "").members as
-          Array<{ run_plan_id?: string }> | undefined;
-        const nextPlanId = members?.[activeRun.sequence]?.run_plan_id;
-        if (nextPlanId) {
-          const nextTask = await dispatchNextImplementationTask(
-            activeRun,
-            nextPlanId,
-          );
-          return repository.updateRun(activeRun.runId, {
-            status: "in_progress",
-            sequence: activeRun.sequence + 1,
-            currentPhase: `Phase ${activeRun.sequence + 1} · Implementation`,
-            currentTask: `Codex task ${nextTask.taskId}`,
-            taskId: nextTask.taskId,
-            adapter: nextTask.adapter,
-          });
-        }
-        return repository.updateRun(activeRun.runId, {
-          status: "complete",
-          progress: 100,
-          currentTask: "Validation accepted; work package complete",
-        });
+        return await advanceAcceptedRun(activeRun);
       }
     }
     return repository.updateRun(request.params.runId, { status });
@@ -1186,25 +1221,45 @@ const taskMonitor = setInterval(() => {
       const adapter =
         adapters[run.adapter as keyof typeof adapters] ??
         adapters.codex_app_server;
+      let progress: ExecutionProgress | null = null;
+      try {
+        progress = await repository.syncExecutionProgress(run.runId);
+      } catch (cause) {
+        repository.updateRun(run.runId, {
+          status: "blocked",
+          currentTask: `Execution progress is invalid: ${cause instanceof Error ? cause.message : String(cause)}`,
+        });
+        return;
+      }
       const task = await adapter.read?.(run.taskId);
       const normalized = task?.status.toLowerCase() ?? "";
+      const currentRun = repository.getRun(run.runId);
       if (
-        run.status === "in_progress" &&
-        ["failed", "error", "cancelled", "canceled"].includes(normalized)
+        currentRun?.status !== "in_progress" ||
+        currentRun.taskId !== run.taskId
       )
+        return;
+      if (["failed", "error", "cancelled", "canceled"].includes(normalized))
         repository.updateRun(run.runId, {
           status: "failed",
           currentTask: `Codex task ${run.taskId} ${normalized}`,
         });
-      else if (
-        run.status === "in_progress" &&
-        ["completed", "complete", "succeeded"].includes(normalized)
-      )
+      else if (normalized === "blocked")
         repository.updateRun(run.runId, {
           status: "blocked",
           currentTask:
-            "Task complete · review diff and record validation evidence",
+            progress?.tasks.find((item) => item.status === "blocked")?.note ??
+            `Codex task ${run.taskId} is blocked`,
         });
+      else if (["completed", "complete", "succeeded"].includes(normalized)) {
+        const gate = await repository.executionProgressGate(run.runId);
+        repository.updateRun(run.runId, {
+          status: "blocked",
+          currentTask: gate.ready
+            ? "Run plan complete · review diff and record validation evidence"
+            : `Codex task ended before every status was green · ${gate.reasons.join(" ")}`,
+        });
+      }
     } catch {
       /* transient adapter/repository failures remain visible through the next poll */
     } finally {

@@ -15,6 +15,12 @@
       "type": "string",
       "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
     },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "run_plan_id": {
+      "type": "string",
+      "pattern": "^RP-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"
+    },
+    "run_plan_revision": { "type": "integer", "minimum": 1 },
     "outcome": { "enum": ["passed", "failed", "blocked", "partial"] },
     "checks": { "type": "array", "items": { "$ref": "#/$defs/check" } },
     "result_commit": { "type": "string", "pattern": "^[A-Fa-f0-9]{7,64}$" }

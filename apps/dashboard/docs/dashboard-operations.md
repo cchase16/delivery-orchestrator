@@ -56,6 +56,30 @@ The dashboard writes durable workflow records through its backend. Runtime
 leases, task reconnect data, logs, and the SQLite state database live under
 `.factory-local/` and are intentionally reconstructible and ignored by Git.
 
+### Work-package execution
+
+**Start implementation** creates one isolated product worktree and starts the
+first approved run plan in the work package's saved sequence. Each plan is sent
+to Codex as a concise goal, prefixed with the configured system plan, product
+baseline, module inventory, factory boundaries, and the exact approved run-plan
+content. Codex is instructed to execute the plan in phase/task order and never
+start another plan itself.
+
+The approved Markdown and sidecar remain immutable. The task updates its narrow
+writable progress file at
+`.factory-local/progress-input/<run-id>/progress.json`; the dashboard validates
+that file against the execution-progress schema and the exact phase/task IDs in
+the approved sidecar before reflecting it in the UI.
+
+The next run plan starts automatically only after the current Codex task has
+ended, all current-plan phase and task statuses are `complete`, validation
+evidence bound to that package sequence and exact plan revision passes, and the
+operator accepts the result. Evidence from an earlier sequence cannot unlock a
+later plan. A blocked or incomplete status keeps the package on the current
+sequence. Resolve the blocker and use
+**Retry task** to run that plan again; **Resume run** is only a fallback for a
+previously accepted sequence whose automatic dispatch could not start.
+
 ### Manual delivery-lock resolution
 
 The current lock resolver is an explicit operator gate. On **Validation**, use

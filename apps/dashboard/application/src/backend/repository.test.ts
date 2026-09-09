@@ -565,10 +565,11 @@ describe("DeliveryRepository", () => {
       work_package_id: workPackage.id,
       run_plan_id: runPlan.id,
       run_plan_revision: runPlan.revision,
-      status: "in_progress",
+      status: "complete",
       current_phase_id: "PH-01",
       current_task_id: "TASK-01",
-      tasks: [{ task_id: "TASK-01", status: "in_progress" }],
+      phases: [{ phase_id: "PH-01", status: "complete" }],
+      tasks: [{ task_id: "TASK-01", status: "complete" }],
     });
     const approvedPlanAfterProgress = (
       await repository.snapshot()
@@ -654,7 +655,7 @@ describe("DeliveryRepository", () => {
       progress: 50,
       currentTask: expect.stringContaining("sequence 2"),
     });
-    repository.updateRun(started.runId, { sequence: 2 });
+    repository.updateRun(started.runId, { total: 1 });
     await expect(
       repository.recordResultDisposition({
         runId: started.runId,

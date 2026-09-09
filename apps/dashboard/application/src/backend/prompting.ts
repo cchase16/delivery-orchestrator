@@ -17,7 +17,7 @@ const execFileAsync = promisify(execFile);
 const templateVersions = {
   work_package_sequencing: "work-package-sequencing.v1",
   run_plan_generation: "run-plan-generation.v3",
-  run_plan_execution: "run-plan-execution.v1",
+  run_plan_execution: "run-plan-execution.v2",
 } as const;
 
 const runPlanTemplateDirectory = path.join("templates", "run-plan");
@@ -108,6 +108,16 @@ export class PromptBuilder {
     taskType: PromptProfile["taskType"],
     artifactIds: string[],
     profile: PromptProfile,
+    execution?: {
+      runId: string;
+      workPackageId: string;
+      planPath: string;
+      progressFilePath: string;
+      firstPhaseId: string;
+      firstPhaseTitle: string;
+      firstTaskId: string;
+      firstTaskTitle: string;
+    },
   ): Promise<PromptPacket> {
     const expectedMode =
       taskType === "run_plan_execution" ? "goal" : "standard";
@@ -181,6 +191,17 @@ export class PromptBuilder {
       })
       .join("\n\n");
     let runPlanTemplate = "";
+    const executionGoal =
+      taskType === "run_plan_execution"
+        ? [
+            `Review the implementation run plan ${execution?.planPath ?? documents[0]?.artifact.path ?? artifactIds[0]}.`,
+            `When ready, begin implementing this document, starting with ${execution ? `${execution.firstPhaseId} (${execution.firstPhaseTitle}), ${execution.firstTaskId} (${execution.firstTaskTitle})` : "the first listed phase and task"}.`,
+            "Work in order and keep working until every item is complete.",
+            execution
+              ? `As each task and phase is completed, update the status in ${execution.progressFilePath}.`
+              : "As each task and phase is completed, update the supplied execution-progress overlay.",
+          ].join(" ")
+        : undefined;
     const instruction =
       taskType === "run_plan_generation"
         ? await (async () => {
@@ -222,31 +243,70 @@ export class PromptBuilder {
           })()
         : taskType === "work_package_sequencing"
           ? "Suggest an execution sequence only for the supplied approved run plans. Explain dependencies, shared Odoo modules, path overlap, database concerns, conflicts, and risk. Return exactly one JSON object with ordered_run_plan_ids and rationale. Do not rewrite any run plan."
-          : "Execute the supplied approved implementation run plan as a goal. Work through phases and tasks in order, keep progress in the separate execution overlay, respect allowed and forbidden paths, and stop with a structured blocker when required input or permission is missing.";
-    const prompt = [
+          : [
+              "Treat the approved implementation run plan as immutable and execute it as one persistent goal.",
+              "Implement phases and tasks strictly in their listed order and perform the plan's verification work.",
+              "The execution-progress file is the only workflow status document you may edit; preserve its identifiers and JSON structure.",
+              "When beginning a task, mark it in_progress. When it is finished and verified, mark it complete. Mark a phase complete only when every task in that phase is complete.",
+              "If required input, permission, compatibility, or validation is unresolved, mark the current task, phase, and overall execution blocked, add a concrete note, and stop. Never mark incomplete or deferred work complete.",
+              "Do not begin another run plan. The dashboard will start the next sequenced plan only after this plan's execution, validation, and acceptance statuses are green.",
+            ].join("\n");
+    const commonHeader = [
       `Factory dashboard task: ${taskType}`,
       `Prompt mode: ${profile.promptMode}`,
       `Template: ${templateVersions[taskType]}`,
-      "",
-      instruction,
-      ...(runPlanTemplate
+    ];
+    const prompt =
+      taskType === "run_plan_execution"
         ? [
+            ...commonHeader,
             "",
-            "Canonical run-plan Markdown template:",
-            "<run-plan-template>",
-            runPlanTemplate.trim(),
-            "</run-plan-template>",
-          ]
-        : []),
-      "",
-      "System context:",
-      systemContext.text,
-      "",
-      "Exact input artifacts:",
-      artifactText,
-      "",
-      "Write boundary: durable workflow records belong in the delivery repository; product changes belong only in the isolated product worktree; never approve your own work.",
-    ].join("\n");
+            "System context:",
+            systemContext.text,
+            "",
+            "Execution contract:",
+            instruction,
+            ...(execution
+              ? [
+                  "",
+                  "Execution identity:",
+                  `- Run: ${execution.runId}`,
+                  `- Work package: ${execution.workPackageId}`,
+                  `- Approved run plan: ${documents[0]?.artifact.id} revision ${documents[0]?.artifact.revision}`,
+                  `- Progress file: ${execution.progressFilePath}`,
+                ]
+              : []),
+            "",
+            "Exact input artifacts:",
+            artifactText,
+            "",
+            "Goal:",
+            executionGoal ?? "Execute the approved run plan.",
+            "",
+            "Write boundary: product changes belong only in the isolated product worktree. Do not edit delivery artifacts, approvals, evidence, or release records. Never approve your own work.",
+          ].join("\n")
+        : [
+            ...commonHeader,
+            "",
+            instruction,
+            ...(runPlanTemplate
+              ? [
+                  "",
+                  "Canonical run-plan Markdown template:",
+                  "<run-plan-template>",
+                  runPlanTemplate.trim(),
+                  "</run-plan-template>",
+                ]
+              : []),
+            "",
+            "System context:",
+            systemContext.text,
+            "",
+            "Exact input artifacts:",
+            artifactText,
+            "",
+            "Write boundary: durable workflow records belong in the delivery repository; product changes belong only in the isolated product worktree; never approve your own work.",
+          ].join("\n");
     return {
       taskType,
       promptMode: profile.promptMode,
@@ -255,6 +315,7 @@ export class PromptBuilder {
       templateVersion: templateVersions[taskType],
       redactionApplied,
       inputArtifacts: inputs,
+      ...(executionGoal ? { goal: executionGoal } : {}),
       prompt,
     };
   }
@@ -607,7 +668,7 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
           "thread/goal/set",
           {
             threadId,
-            objective: packet.prompt.slice(0, 4000),
+            objective: packet.goal ?? packet.prompt.slice(0, 4000),
             status: "active",
           },
           goalId,

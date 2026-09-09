@@ -275,6 +275,25 @@ describe("PromptBuilder and execution adapters", () => {
       "run_plan_execution",
       [runPlan.id],
       executionProfile,
+      {
+        runId: "RUN-PROMPT-001",
+        workPackageId: "WP-PROMPT-001",
+        planPath: path.join(
+          config.deliveryRepository,
+          "run-plans",
+          "context-menu.md",
+        ),
+        progressFilePath: path.join(
+          config.runtimeDirectory,
+          "progress-input",
+          "RUN-PROMPT-001",
+          "progress.json",
+        ),
+        firstPhaseId: "PH-01",
+        firstPhaseTitle: "Foundation",
+        firstTaskId: "TASK-01",
+        firstTaskTitle: "Add the menu service",
+      },
     );
     expect(packet).toMatchObject({
       taskType: "run_plan_execution",
@@ -284,7 +303,17 @@ describe("PromptBuilder and execution adapters", () => {
     });
     expect(packet.prompt).toContain("Context menu implementation");
     expect(packet.prompt).toContain(
-      "Execute the supplied approved implementation run plan as a goal",
+      "Treat the approved implementation run plan as immutable",
+    );
+    expect(packet.goal).toContain(
+      "starting with PH-01 (Foundation), TASK-01 (Add the menu service)",
+    );
+    expect(packet.goal).toContain("progress.json");
+    expect(packet.prompt.indexOf("System context:")).toBeLessThan(
+      packet.prompt.indexOf("Goal:"),
+    );
+    expect(packet.prompt).toContain(
+      "Do not begin another run plan. The dashboard will start the next sequenced plan",
     );
     expect(packet.prompt).not.toContain("sk-test-secret-value");
   });
@@ -295,7 +324,7 @@ describe("PromptBuilder and execution adapters", () => {
       promptMode: "goal",
       model: "gpt-5.6-luna",
       reasoningEffort: "high",
-      templateVersion: "run-plan-execution.v1",
+      templateVersion: "run-plan-execution.v2",
       redactionApplied: false,
       inputArtifacts: [],
       prompt: "Execute the approved plan.",
