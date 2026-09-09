@@ -56,6 +56,21 @@ The dashboard writes durable workflow records through its backend. Runtime
 leases, task reconnect data, logs, and the SQLite state database live under
 `.factory-local/` and are intentionally reconstructible and ignored by Git.
 
+### Manual delivery-lock resolution
+
+The current lock resolver is an explicit operator gate. On **Validation**, use
+**Resolve delivery lock** and accept the confirmation after reviewing the
+repository state. The resolver replaces the scaffold with a generated snapshot
+containing the configured repositories' current commits and working-tree state,
+the registered contract fingerprints, and the local operator/time attestation.
+
+Working-tree changes are recorded as warnings and do not block execution in
+this version. An implementation run still starts from the captured product
+`HEAD` in an isolated worktree, so uncommitted product changes are not included
+automatically. Future policy can promote selected repository or path-level
+changes from warnings to blockers without changing the lock format's manual
+attestation boundary.
+
 ## Upgrade
 
 Stop the running dashboard, preserve the delivery repository, then install from
@@ -93,7 +108,8 @@ delivery repository.
 - **Delivery repository is not accessible:** set `DELIVERY_REPOSITORY` to an
   existing absolute directory.
 - **`delivery.lock` is unresolved:** browsing remains available, but governed
-  execution is intentionally blocked until the resolver supplies exact inputs.
+  execution is blocked until an operator uses **Resolve delivery lock** on the
+  Validation page and accepts the captured state.
 - **System plan is missing or invalid:** add a schema-valid artifact under the
   configured `system-plans/` directory; do not bypass preflight.
 - **Codex App Server unavailable:** verify `codex app-server --help` works in

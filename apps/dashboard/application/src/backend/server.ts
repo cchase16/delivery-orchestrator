@@ -258,6 +258,23 @@ app.get<{
     });
   }
 });
+app.post<{
+  Body: { acknowledged?: boolean; note?: string };
+}>("/api/delivery-lock/resolve", async (request, reply) => {
+  try {
+    return await repository.resolveDeliveryLock({
+      acknowledged: request.body?.acknowledged === true,
+      note: request.body?.note,
+    });
+  } catch (cause) {
+    return reply.code(409).send({
+      error:
+        cause instanceof Error
+          ? cause.message
+          : "Unable to resolve the delivery lock.",
+    });
+  }
+});
 app.post<{ Body: Record<string, unknown> }>(
   "/api/commands",
   async (request, reply) => {

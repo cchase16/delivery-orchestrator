@@ -5,6 +5,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { parse } from "yaml";
 import { classifyValidationOutcome, DeliveryRepository } from "./repository.js";
 import { RuntimeState } from "./state.js";
 import type { DashboardConfig } from "./config.js";
@@ -737,8 +738,110 @@ describe("DeliveryRepository", () => {
         expect.stringContaining("Work package"),
         expect.stringContaining("Requested profile"),
         expect.stringContaining("Codex adapter"),
-        expect.stringContaining("Product worktree"),
       ]),
+    );
+    expect(
+      preflight.checks.find((check) => check.name === "Product worktree"),
+    ).toMatchObject({ status: "warning" });
+  });
+
+  it("resolves the delivery lock from an explicit manual acknowledgement", async () => {
+    const config = await fixture();
+    await fs.writeFile(
+      path.join(config.deliveryRepository, "delivery.lock"),
+      "lock_version: 1\nstatus: unresolved\n",
+    );
+    await run("git", ["-C", config.productRepository, "init", "-q"]);
+    await run("git", [
+      "-C",
+      config.productRepository,
+      "config",
+      "user.email",
+      "lock-test@example.invalid",
+    ]);
+    await run("git", [
+      "-C",
+      config.productRepository,
+      "config",
+      "user.name",
+      "Lock test",
+    ]);
+    await fs.writeFile(
+      path.join(config.productRepository, "README.md"),
+      "baseline\n",
+    );
+    await run("git", ["-C", config.productRepository, "add", "."]);
+    await run("git", [
+      "-C",
+      config.productRepository,
+      "commit",
+      "-qm",
+      "baseline",
+    ]);
+    const productRevision = (
+      await run("git", ["-C", config.productRepository, "rev-parse", "HEAD"])
+    ).stdout.trim();
+    await fs.appendFile(
+      path.join(config.productRepository, "README.md"),
+      "operator-reviewed change\n",
+    );
+    config.schemaDirectory = path.resolve(process.cwd(), "../../../schemas");
+    const state = new RuntimeState(config.runtimeDirectory);
+    states.push(state);
+    const repository = new DeliveryRepository(config, state);
+
+    await expect(
+      repository.resolveDeliveryLock({ acknowledged: false }),
+    ).rejects.toThrow("operator acknowledgement");
+    const resolution = await repository.resolveDeliveryLock({
+      acknowledged: true,
+      note: "Approved for the pilot run.",
+    });
+    expect(resolution).toMatchObject({
+      status: "resolved",
+      dirtyRepositories: ["product"],
+    });
+    expect(resolution.contractCount).toBeGreaterThan(0);
+    const lock = parse(
+      await fs.readFile(
+        path.join(config.deliveryRepository, "delivery.lock"),
+        "utf8",
+      ),
+    ) as Record<string, any>;
+    expect(lock).toMatchObject({
+      lock_version: 1,
+      status: "resolved",
+      resolution: {
+        mode: "manual_operator_attestation",
+        note: "Approved for the pilot run.",
+        policy: { repository_changes: "warning" },
+      },
+      repositories: {
+        product: {
+          revision: productRevision,
+          working_tree: "dirty",
+        },
+      },
+    });
+    expect(lock.contracts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "urn:odoo-development-factory:schema:approval:1",
+          sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        }),
+      ]),
+    );
+    const snapshot = await repository.snapshot();
+    expect(snapshot.system.lockStatus).toBe("resolved");
+    expect(snapshot.blockers).not.toContain(
+      "delivery.lock is unresolved; governed execution is blocked.",
+    );
+    const preflight = await repository.preflight({ adapter: "fake" });
+    expect(
+      preflight.checks.find((check) => check.name === "Product worktree"),
+    ).toMatchObject({ status: "warning" });
+    expect(preflight.blockers).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("Product worktree")]),
     );
   });
 

@@ -111,7 +111,7 @@ describe("dashboard HTTP integration", () => {
     );
     await fs.writeFile(
       path.join(delivery, "delivery.lock"),
-      "status: resolved\n",
+      "lock_version: 1\nstatus: unresolved\n",
     );
     const requirement = {
       schema_version: 1,
@@ -173,6 +173,27 @@ describe("dashboard HTTP integration", () => {
     children.push(child);
     await waitForHealth(port);
     const initial = await request(port, "/api/snapshot");
+    expect(initial.value.system.lockStatus).toBe("unresolved");
+    const unacknowledgedLock = await request(
+      port,
+      "/api/delivery-lock/resolve",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ acknowledged: false }),
+      },
+    );
+    expect(unacknowledgedLock.response.status).toBe(409);
+    const resolvedLock = await request(port, "/api/delivery-lock/resolve", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ acknowledged: true, note: "Integration pilot" }),
+    });
+    expect(resolvedLock.response.ok).toBe(true);
+    expect(resolvedLock.value).toMatchObject({ status: "resolved" });
+    expect(resolvedLock.value.contractCount).toBeGreaterThan(0);
+    const resolvedSnapshot = await request(port, "/api/snapshot");
+    expect(resolvedSnapshot.value.system.lockStatus).toBe("resolved");
     const requirementArtifact = initial.value.artifacts.find(
       (artifact: { kind: string }) => artifact.kind === "requirement",
     );

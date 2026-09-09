@@ -37,6 +37,7 @@ import type {
   ApprovalSummary,
   ArtifactSummary,
   ExecutionProgress,
+  PreflightResult,
   PromptProfile,
   QualityGate,
   ReasoningEffort,
@@ -889,7 +890,8 @@ function PageContent({
     return <ApprovalsPage snapshot={snapshot} onDecision={onDecision} />;
   if (page === "Active Runs")
     return <ActiveRunsPage snapshot={snapshot} onRunControl={onRunControl} />;
-  if (page === "Validation") return <ValidationPage snapshot={snapshot} />;
+  if (page === "Validation")
+    return <ValidationPage snapshot={snapshot} onRefresh={onRefresh} />;
   if (page === "History") return <HistoryPage snapshot={snapshot} />;
   return (
     <OverviewPage
@@ -3426,8 +3428,21 @@ function ActiveRunsPage({
     </>
   );
 }
-function ValidationPage({ snapshot }: { snapshot: Snapshot }) {
+function ValidationPage({
+  snapshot,
+  onRefresh,
+}: {
+  snapshot: Snapshot;
+  onRefresh: () => Promise<void>;
+}) {
   const activeRun = snapshot.activeRun;
+  const approvedPackage = snapshot.artifacts.find(
+    (artifact) =>
+      artifact.kind === "work_package" && artifact.status === "approved",
+  );
+  const executionProfile = snapshot.promptProfiles.find(
+    (profile) => profile.taskType === "run_plan_execution",
+  );
   const [baseCommit, setBaseCommit] = useState(
     activeRun?.baseCommit ?? snapshot.system.productHead ?? "",
   );
@@ -3465,6 +3480,95 @@ function ValidationPage({ snapshot }: { snapshot: Snapshot }) {
   const [selectedQualityGates, setSelectedQualityGates] = useState<
     QualityGate[]
   >(["dashboard_verify"]);
+  const [preflight, setPreflight] = useState<PreflightResult | null>(null);
+  const [preflightLoading, setPreflightLoading] = useState(false);
+  const [lockResolutionMessage, setLockResolutionMessage] = useState<
+    string | null
+  >(null);
+  const [resolvingLock, setResolvingLock] = useState(false);
+  const preflightKey = [
+    snapshot.system.lockStatus,
+    approvedPackage?.id ?? "",
+    approvedPackage?.digest ?? "",
+    executionProfile?.model ?? "",
+    executionProfile?.reasoningEffort ?? "",
+    executionProfile?.adapter ?? "",
+  ].join(":");
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).has("demo")) return;
+    let cancelled = false;
+    const query = new URLSearchParams({
+      ...(approvedPackage ? { workPackageId: approvedPackage.id } : {}),
+      ...(executionProfile
+        ? {
+            model: executionProfile.model,
+            reasoningEffort: executionProfile.reasoningEffort,
+            adapter: executionProfile.adapter,
+          }
+        : {}),
+    });
+    setPreflightLoading(true);
+    void fetch(`/api/preflight?${query.toString()}`)
+      .then(async (response) => {
+        const result = (await response.json()) as PreflightResult & {
+          error?: string;
+        };
+        if (!response.ok)
+          throw new Error(result.error ?? "Preflight checks are unavailable.");
+        if (!cancelled) setPreflight(result);
+      })
+      .catch((cause) => {
+        if (!cancelled)
+          setLockResolutionMessage(
+            cause instanceof Error
+              ? cause.message
+              : "Preflight checks are unavailable.",
+          );
+      })
+      .finally(() => {
+        if (!cancelled) setPreflightLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [preflightKey]);
+  async function resolveDeliveryLock() {
+    const accepted = window.confirm(
+      "Resolve the delivery lock using the current repository commits and contract fingerprints? Working-tree changes will be recorded as warnings and will not be included in the isolated implementation baseline.",
+    );
+    if (!accepted) return;
+    setResolvingLock(true);
+    setLockResolutionMessage(null);
+    try {
+      const response = await fetch("/api/delivery-lock/resolve", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ acknowledged: true }),
+      });
+      const result = (await response.json()) as {
+        resolvedAt?: string;
+        repositoryCount?: number;
+        contractCount?: number;
+        dirtyRepositories?: string[];
+        error?: string;
+      };
+      if (!response.ok)
+        throw new Error(result.error ?? "Unable to resolve the delivery lock.");
+      const dirtyCount = result.dirtyRepositories?.length ?? 0;
+      setLockResolutionMessage(
+        `Delivery lock resolved with ${result.repositoryCount ?? 0} repository bindings and ${result.contractCount ?? 0} contract fingerprints${dirtyCount ? `; ${dirtyCount} dirty repository state${dirtyCount === 1 ? "" : "s"} recorded as warning${dirtyCount === 1 ? "" : "s"}` : ""}.`,
+      );
+      await onRefresh();
+    } catch (cause) {
+      setLockResolutionMessage(
+        cause instanceof Error
+          ? cause.message
+          : "Unable to resolve the delivery lock.",
+      );
+    } finally {
+      setResolvingLock(false);
+    }
+  }
   useEffect(() => {
     if (!activeRun || new URLSearchParams(window.location.search).has("demo")) {
       setTraceabilityContext(null);
@@ -3731,34 +3835,67 @@ function ValidationPage({ snapshot }: { snapshot: Snapshot }) {
             </div>
             <ShieldCheck size={19} />
           </div>
-          {[
-            "Schema validation",
-            "Repository paths",
-            "Approval bindings",
-            "Product baseline",
-            "Allowed paths",
-            "Codex availability",
-          ].map((label, index) => (
-            <div className="check-row" key={label}>
-              <StatusMark
-                status={
-                  (index === 0 &&
-                    (snapshot.validationErrors?.length ?? 0) > 0) ||
-                  (index === 5 && snapshot.health[3]?.status !== "healthy")
-                    ? "warning"
-                    : "complete"
-                }
-              />
-              <span>{label}</span>
-              <small>
-                {index === 0 && (snapshot.validationErrors?.length ?? 0) > 0
-                  ? `${snapshot.validationErrors?.length} validation error(s)`
-                  : index === 5 && snapshot.health[3]?.status !== "healthy"
-                    ? "Capability check pending"
-                    : "Ready"}
-              </small>
+          {snapshot.system.lockStatus !== "resolved" && (
+            <div className="data-banner warning lock-resolution-banner">
+              <AlertTriangle size={17} />
+              <div>
+                <strong>Manual delivery gate</strong>
+                <span>
+                  Resolve the lock to accept the currently captured repository
+                  and contract state. Working-tree changes are warnings in this
+                  version, not automatic blockers.
+                </span>
+              </div>
+              <button
+                className="primary-button"
+                onClick={() => void resolveDeliveryLock()}
+                disabled={resolvingLock}
+              >
+                {resolvingLock ? (
+                  <Loader2 className="spin" size={15} />
+                ) : (
+                  <ShieldCheck size={15} />
+                )}
+                {resolvingLock ? "Resolving…" : "Resolve delivery lock"}
+              </button>
             </div>
-          ))}
+          )}
+          {lockResolutionMessage && (
+            <div className="empty-inline" role="status">
+              <CheckCircle2 size={17} />
+              {lockResolutionMessage}
+            </div>
+          )}
+          {preflightLoading && !preflight ? (
+            <div className="empty-inline">
+              <Loader2 className="spin" size={17} />
+              Loading repository readiness…
+            </div>
+          ) : (
+            (
+              preflight?.checks ?? [
+                {
+                  name: "Delivery lock",
+                  status:
+                    snapshot.system.lockStatus === "resolved"
+                      ? "ready"
+                      : "blocked",
+                  detail: snapshot.system.lockStatus,
+                },
+              ]
+            ).map((check) => (
+              <div className="check-row" key={check.name}>
+                <StatusMark
+                  status={check.status === "ready" ? "complete" : check.status}
+                />
+                <span>{check.name}</span>
+                <small>
+                  {check.status.replace(/^./, (letter) => letter.toUpperCase())}
+                  {check.detail ? ` · ${check.detail}` : ""}
+                </small>
+              </div>
+            ))
+          )}
         </section>
         <section className="panel validation-card">
           <div className="panel-title">
@@ -3956,7 +4093,7 @@ function ValidationPage({ snapshot }: { snapshot: Snapshot }) {
           <div>
             <span className="muted-label">Release state</span>
             <strong>
-              {snapshot.blockers.length === 0
+              {(preflight?.ready ?? snapshot.blockers.length === 0)
                 ? "Ready for human review"
                 : "Blocked by repository readiness"}
             </strong>

@@ -1132,6 +1132,141 @@ test("approved work-package member shows its current approval state", async ({
   ).toHaveCount(0);
 });
 
+test("operator can manually resolve the delivery lock from Validation", async ({
+  page,
+}) => {
+  let lockResolved = false;
+  const lockRequests: Array<Record<string, unknown>> = [];
+  const snapshot = () => ({
+    generatedAt: "2026-09-09T12:00:00.000Z",
+    system: {
+      id: "test-system",
+      name: "Test system",
+      branch: "main",
+      deliveryPath: "delivery",
+      lockStatus: lockResolved ? "resolved" : "unresolved",
+      productHead: "a".repeat(40),
+    },
+    health: [
+      { label: "Delivery repository", status: "healthy", detail: "Connected" },
+      { label: "Product repository", status: "healthy", detail: "Connected" },
+      {
+        label: "Git",
+        status: "warning",
+        detail: "main · worktree has changes",
+      },
+      {
+        label: "Codex App Server",
+        status: "healthy",
+        detail: "Available",
+      },
+    ],
+    artifacts: [
+      {
+        id: "SPL-BROWSER-001",
+        title: "System plan",
+        kind: "system_plan",
+        path: "system-plans/plan.json",
+        extension: "json",
+        revision: 1,
+        digest: "b".repeat(64),
+        status: "approved",
+        updatedAt: "2026-09-09T10:00:00.000Z",
+      },
+      {
+        id: "WP-BROWSER-LOCK",
+        title: "Approved package",
+        kind: "work_package",
+        path: "work-packages/package.json",
+        extension: "json",
+        revision: 1,
+        digest: "c".repeat(64),
+        status: "approved",
+        updatedAt: "2026-09-09T11:00:00.000Z",
+      },
+    ],
+    approvals: [],
+    activeRun: null,
+    promptProfiles: [
+      {
+        taskType: "run_plan_execution",
+        label: "Run-plan execution",
+        model: "gpt-5.6-luna",
+        reasoningEffort: "high",
+        promptMode: "goal",
+        adapter: "codex_app_server",
+      },
+    ],
+    blockers: lockResolved
+      ? []
+      : ["delivery.lock is unresolved; governed execution is blocked."],
+    validationErrors: [],
+  });
+  await page.route("**/api/snapshot", async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(snapshot()),
+    }),
+  );
+  await page.route("**/api/preflight?*", async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ready: lockResolved,
+        checks: [
+          {
+            name: "Delivery lock",
+            status: lockResolved ? "ready" : "blocked",
+            detail: lockResolved ? "resolved" : "unresolved",
+          },
+          {
+            name: "Product worktree",
+            status: "warning",
+            detail: "main · worktree has changes",
+          },
+        ],
+        blockers: lockResolved ? [] : ["Delivery lock: unresolved"],
+      }),
+    }),
+  );
+  await page.route("**/api/delivery-lock/resolve", async (route) => {
+    lockRequests.push(JSON.parse(route.request().postData() ?? "{}"));
+    lockResolved = true;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        status: "resolved",
+        repositoryCount: 5,
+        contractCount: 12,
+        dirtyRepositories: ["product"],
+      }),
+    });
+  });
+  page.on("dialog", async (dialog) => dialog.accept());
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Validation", exact: true }).click();
+  const readiness = page.locator(".validation-card", {
+    hasText: "Readiness checks",
+  });
+  await expect(readiness.getByText("Blocked · unresolved")).toBeVisible();
+  await expect(
+    readiness.getByText("Warning · main · worktree has changes"),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Resolve delivery lock", exact: true })
+    .click();
+  await expect(
+    page.getByText(/Delivery lock resolved with 5 repository bindings/),
+  ).toBeVisible();
+  await expect(readiness.getByText("Ready · resolved")).toBeVisible();
+  await expect(page.getByText("Ready for human review")).toBeVisible();
+  expect(lockRequests).toEqual([{ acknowledged: true }]);
+});
+
 test("validation review records evidence before accepting a result", async ({
   page,
 }) => {

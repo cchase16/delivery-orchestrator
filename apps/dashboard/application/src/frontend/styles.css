@@ -1785,6 +1785,14 @@ h2 {
   background: #fff9eb;
   color: #95610f;
 }
+.lock-resolution-banner {
+  align-items: center;
+  margin: 0;
+}
+.lock-resolution-banner .primary-button {
+  flex-shrink: 0;
+  margin-left: auto;
+}
 .data-banner.error {
   border-color: #e9b9b6;
   background: #fff5f4;

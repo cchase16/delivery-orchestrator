@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { parse } from "yaml";
+import { parse, stringify } from "yaml";
 import { reviewProductDiff, type DiffReview } from "./diff.js";
 import type {
   ActiveRun,
@@ -476,6 +476,190 @@ export class DeliveryRepository {
     );
   }
 
+  async resolveDeliveryLock(input: {
+    acknowledged: boolean;
+    note?: string;
+  }): Promise<{
+    status: "resolved";
+    resolvedAt: string;
+    repositoryCount: number;
+    contractCount: number;
+    dirtyRepositories: string[];
+  }> {
+    if (!input.acknowledged)
+      throw new Error(
+        "Manual delivery-lock resolution requires operator acknowledgement.",
+      );
+    if (this.state.getActiveRun())
+      throw new Error(
+        "The delivery lock cannot be changed during an active run.",
+      );
+    const note = input.note?.trim() ?? "";
+    if (note.length > 1000)
+      throw new Error(
+        "Delivery-lock resolution notes are limited to 1000 characters.",
+      );
+
+    let systemYaml: Record<string, unknown> = {};
+    try {
+      systemYaml = parse(
+        await fs.readFile(
+          path.join(this.config.deliveryRepository, "system.yaml"),
+          "utf8",
+        ),
+      ) as Record<string, unknown>;
+    } catch {
+      throw new Error(
+        "system.yaml must be readable before resolving the lock.",
+      );
+    }
+    const configuredRepositories =
+      typeof systemYaml.repositories === "object" &&
+      systemYaml.repositories !== null
+        ? (systemYaml.repositories as Record<string, unknown>)
+        : {};
+    const repositoryPaths = new Map<string, string>();
+    for (const [name, value] of Object.entries(configuredRepositories)) {
+      if (typeof value !== "object" || value === null) continue;
+      const localPath = (value as Record<string, unknown>).local_path;
+      if (typeof localPath !== "string" || !localPath.trim()) continue;
+      repositoryPaths.set(name, localPath.replaceAll("\\", "/"));
+    }
+    if (!repositoryPaths.has("product"))
+      repositoryPaths.set(
+        "product",
+        path
+          .relative(
+            this.config.deliveryRepository,
+            this.config.productRepository,
+          )
+          .replaceAll("\\", "/"),
+      );
+    if (!repositoryPaths.has("delivery_orchestrator"))
+      repositoryPaths.set(
+        "delivery_orchestrator",
+        path
+          .relative(
+            this.config.deliveryRepository,
+            this.config.orchestratorRepository,
+          )
+          .replaceAll("\\", "/"),
+      );
+    repositoryPaths.set("delivery_repository", ".");
+
+    const repositoryBindings: Record<
+      string,
+      {
+        path: string;
+        revision: string | null;
+        branch: string;
+        working_tree: "clean" | "dirty" | "unavailable";
+      }
+    > = {};
+    for (const [name, configuredPath] of [...repositoryPaths.entries()].sort(
+      ([left], [right]) => left.localeCompare(right),
+    )) {
+      const repositoryPath = path.resolve(
+        this.config.deliveryRepository,
+        configuredPath,
+      );
+      const git = await this.inspectRepositoryGit(repositoryPath);
+      repositoryBindings[name] = {
+        path: configuredPath,
+        revision: git.head || null,
+        branch: git.branch,
+        working_tree: git.available
+          ? git.dirty
+            ? "dirty"
+            : "clean"
+          : "unavailable",
+      };
+    }
+
+    const schemaFiles = (await walk(this.config.schemaDirectory))
+      .filter((file) => file.toLowerCase().endsWith(".schema.json"))
+      .sort((left, right) => left.localeCompare(right));
+    const contractBindings = await Promise.all(
+      schemaFiles.map(async (file) => {
+        let schemaId = "unknown";
+        let schemaVersion: number | string | null = null;
+        try {
+          const value = JSON.parse(await fs.readFile(file, "utf8")) as Record<
+            string,
+            unknown
+          >;
+          schemaId = String(value.$id ?? "unknown");
+          schemaVersion =
+            typeof value.schema_version === "number" ||
+            typeof value.schema_version === "string"
+              ? value.schema_version
+              : null;
+        } catch {
+          /* The fingerprint still records unreadable or malformed schemas. */
+        }
+        return {
+          id: schemaId,
+          version: schemaVersion,
+          path: path
+            .relative(this.config.orchestratorRepository, file)
+            .replaceAll("\\", "/"),
+          sha256: await digest(file),
+        };
+      }),
+    );
+    const resolvedAt = new Date().toISOString();
+    const dirtyRepositories = Object.entries(repositoryBindings)
+      .filter(([, binding]) => binding.working_tree === "dirty")
+      .map(([name]) => name);
+    const lock = {
+      lock_version: 1,
+      status: "resolved",
+      resolution: {
+        mode: "manual_operator_attestation",
+        resolved_at: resolvedAt,
+        resolved_by: {
+          actor_id: "local-operator",
+          actor_type: "human",
+          display_name: "Local operator",
+          authentication_method: "localhost",
+        },
+        note:
+          note ||
+          "Operator accepted the captured repository and contract state for governed execution.",
+        policy: {
+          repository_changes: "warning",
+          detail:
+            "Working-tree changes are recorded for review but do not block this manual lock version.",
+        },
+      },
+      repositories: repositoryBindings,
+      contracts: contractBindings,
+    };
+    await this.writeDurable(
+      path.join(this.config.deliveryRepository, "delivery.lock"),
+      [
+        "# GENERATED BY THE DELIVERY-ORCHESTRATOR DASHBOARD.",
+        "# Manual resolution records operator acceptance of the captured state.",
+        stringify(lock, { lineWidth: 0 }).trimEnd(),
+        "",
+      ].join("\n"),
+    );
+    this.state.recordAction("delivery_lock_resolved", {
+      resolvedAt,
+      resolvedBy: "local-operator",
+      repositoryCount: Object.keys(repositoryBindings).length,
+      contractCount: contractBindings.length,
+      dirtyRepositories,
+    });
+    return {
+      status: "resolved",
+      resolvedAt,
+      repositoryCount: Object.keys(repositoryBindings).length,
+      contractCount: contractBindings.length,
+      dirtyRepositories,
+    };
+  }
+
   startWatcher(onChange?: () => void): () => void {
     if (this.watchers.length) return () => this.stopWatcher();
     const targets = [
@@ -662,9 +846,11 @@ export class DeliveryRepository {
         ? []
         : ["Customer delivery repository is not reachable."]),
       ...(productExists ? [] : ["Product repository is not reachable."]),
-      ...(lockStatus === "unresolved"
-        ? ["delivery.lock is unresolved; governed execution is blocked."]
-        : []),
+      ...(lockStatus === "resolved"
+        ? []
+        : [
+            `delivery.lock is ${lockStatus.toLowerCase()}; governed execution is blocked.`,
+          ]),
       ...(systemPlans.length
         ? []
         : ["No system plan is present in the configured delivery repository."]),
@@ -1054,7 +1240,7 @@ export class DeliveryRepository {
     return issues;
   }
 
-  private async inspectGit(): Promise<{
+  private async inspectRepositoryGit(repositoryPath: string): Promise<{
     available: boolean;
     dirty: boolean;
     branch: string;
@@ -1064,7 +1250,7 @@ export class DeliveryRepository {
       const head = (
         await execFileAsync(
           "git",
-          ["-C", this.config.productRepository, "rev-parse", "HEAD"],
+          ["-C", repositoryPath, "rev-parse", "HEAD"],
           { timeout: 3000 },
         )
       ).stdout.trim();
@@ -1072,13 +1258,7 @@ export class DeliveryRepository {
         (
           await execFileAsync(
             "git",
-            [
-              "-C",
-              this.config.productRepository,
-              "rev-parse",
-              "--abbrev-ref",
-              "HEAD",
-            ],
+            ["-C", repositoryPath, "rev-parse", "--abbrev-ref", "HEAD"],
             { timeout: 3000 },
           )
         ).stdout.trim() || "detached";
@@ -1087,7 +1267,7 @@ export class DeliveryRepository {
           "git",
           [
             "-C",
-            this.config.productRepository,
+            repositoryPath,
             "status",
             "--porcelain",
             "--untracked-files=all",
@@ -1099,6 +1279,15 @@ export class DeliveryRepository {
     } catch {
       return { available: false, dirty: false, branch: "unknown", head: "" };
     }
+  }
+
+  private async inspectGit(): Promise<{
+    available: boolean;
+    dirty: boolean;
+    branch: string;
+    head: string;
+  }> {
+    return this.inspectRepositoryGit(this.config.productRepository);
   }
 
   private async inspectCodex(): Promise<{
@@ -3382,7 +3571,12 @@ export class DeliveryRepository {
       },
       {
         name: "Product worktree",
-        status: snapshot.health[2]?.status === "healthy" ? "ready" : "blocked",
+        status:
+          snapshot.health[2]?.status === "healthy"
+            ? "ready"
+            : snapshot.health[2]?.status === "warning"
+              ? "warning"
+              : "blocked",
         detail: snapshot.health[2]?.detail ?? "Unknown",
       },
     ] satisfies PreflightResult["checks"];
