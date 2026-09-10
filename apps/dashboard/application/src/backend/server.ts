@@ -604,6 +604,18 @@ app.post<{
     });
   }
 });
+app.post("/api/factory/resolve", async (_request, reply) => {
+  try {
+    return await repository.resolveFactoryLock();
+  } catch (cause) {
+    return reply.code(409).send({
+      error:
+        cause instanceof Error
+          ? cause.message
+          : "Unable to resolve factory.lock.",
+    });
+  }
+});
 app.post<{
   Params: { runId: string };
   Body: Omit<ExecutionProgress, "schema_version" | "updated_at" | "run_id">;
@@ -970,6 +982,20 @@ app.post<{
   }
 });
 app.post<{
+  Params: { runPlanId: string };
+}>("/api/run-plans/:runPlanId/reset-baseline", async (request, reply) => {
+  try {
+    return await repository.resetRunPlanBaseline(request.params.runPlanId);
+  } catch (cause) {
+    return reply.code(409).send({
+      error:
+        cause instanceof Error
+          ? cause.message
+          : "Unable to reset the run-plan product baseline.",
+    });
+  }
+});
+app.post<{
   Body: { taskType: PromptProfile["taskType"]; artifactIds: string[] };
 }>("/api/prompts/preview", async (request, reply) => {
   try {
@@ -1304,12 +1330,15 @@ app.post<{
         adapters.codex_app_server;
       await adapter.interrupt?.(activeRun.taskId);
     }
-    if (activeRun.taskId && request.body?.action === "cancel") {
-      const adapter =
-        adapters[activeRun.adapter as keyof typeof adapters] ??
-        adapters.codex_app_server;
-      if (adapter.abandon) await adapter.abandon(activeRun.taskId);
-      else await adapter.interrupt?.(activeRun.taskId);
+    if (request.body?.action === "cancel") {
+      if (activeRun.taskId) {
+        const adapter =
+          adapters[activeRun.adapter as keyof typeof adapters] ??
+          adapters.codex_app_server;
+        if (adapter.abandon) await adapter.abandon(activeRun.taskId);
+        else await adapter.interrupt?.(activeRun.taskId);
+      }
+      await repository.removeRunWorktree(activeRun);
     }
     if (request.body?.action === "retry") {
       const currentPlanId = await packageRunPlanId(

@@ -608,6 +608,35 @@ export default function App() {
                   );
                 }
               }}
+              onResolveFactory={async () => {
+                if (
+                  !window.confirm(
+                    "Resolve factory.lock from the current local factory repository and product factory.yaml?",
+                  )
+                )
+                  return;
+                try {
+                  const response = await fetch("/api/factory/resolve", {
+                    method: "POST",
+                  });
+                  if (!response.ok) {
+                    const result = (await response.json()) as {
+                      error?: string;
+                    };
+                    throw new Error(
+                      result.error ?? "Unable to resolve factory.lock",
+                    );
+                  }
+                  setNotice("factory.lock resolved from current local inputs");
+                  await loadSnapshot();
+                } catch (cause) {
+                  setNotice(
+                    cause instanceof Error
+                      ? cause.message
+                      : "Unable to resolve factory.lock",
+                  );
+                }
+              }}
             />
           ) : null}
         </main>
@@ -848,6 +877,7 @@ function PageContent({
   onRunControl,
   onProfileUpdate,
   onResetRepository,
+  onResolveFactory,
 }: {
   page: Page;
   snapshot: Snapshot;
@@ -873,6 +903,7 @@ function PageContent({
   ) => Promise<void>;
   onProfileUpdate: (profile: PromptProfile) => Promise<void>;
   onResetRepository: () => Promise<void>;
+  onResolveFactory: () => Promise<void>;
 }) {
   if (page === "Settings")
     return (
@@ -881,6 +912,7 @@ function PageContent({
         capabilities={capabilities}
         onUpdate={onProfileUpdate}
         onResetRepository={onResetRepository}
+        onResolveFactory={onResolveFactory}
       />
     );
   if (page === "Requirements")
@@ -1458,6 +1490,10 @@ function ArtifactPage({
   const [draftSaved, setDraftSaved] = useState<string | null>(null);
   const [draftSaveError, setDraftSaveError] = useState<string | null>(null);
   const [isSavingRunPlan, setIsSavingRunPlan] = useState(false);
+  const [isResettingBaseline, setIsResettingBaseline] = useState(false);
+  const [baselineResetError, setBaselineResetError] = useState<string | null>(
+    null,
+  );
   const [supersedesRunPlanId, setSupersedesRunPlanId] = useState("");
   const [promptTasks, setPromptTasks] = useState<PromptTaskMonitor[]>([]);
   useEffect(() => {
@@ -1740,6 +1776,41 @@ function ArtifactPage({
       setIsSavingRunPlan(false);
     }
   }
+  async function resetProductBaseline(artifact: ArtifactSummary) {
+    if (kind !== "run_plan") return;
+    if (
+      !window.confirm(
+        `Create a new revision of ${artifact.id} using the current product HEAD as its baseline?`,
+      )
+    )
+      return;
+    setIsResettingBaseline(true);
+    setBaselineResetError(null);
+    try {
+      const response = await fetch(
+        `/api/run-plans/${encodeURIComponent(artifact.id)}/reset-baseline`,
+        { method: "POST" },
+      );
+      const result = (await response.json()) as {
+        id?: string;
+        error?: string;
+      };
+      if (!response.ok)
+        throw new Error(
+          result.error ?? "Unable to reset the product baseline.",
+        );
+      await onRefresh();
+      if (result.id) onOpenArtifact(result.id, "Run Plans");
+    } catch (cause) {
+      setBaselineResetError(
+        cause instanceof Error
+          ? cause.message
+          : "Unable to reset the product baseline.",
+      );
+    } finally {
+      setIsResettingBaseline(false);
+    }
+  }
   const promptRequirement = snapshot.artifacts.find(
     (item) => item.id === promptTask?.requirementId,
   );
@@ -1841,6 +1912,11 @@ function ArtifactPage({
           approvals={snapshot.approvals}
           onDecision={onDecision}
           onOpenArtifact={onOpenArtifact}
+          onResetBaseline={
+            kind === "run_plan" ? resetProductBaseline : undefined
+          }
+          isResettingBaseline={isResettingBaseline}
+          baselineResetError={baselineResetError}
         />
       </div>
       {promptError && (
@@ -2105,6 +2181,9 @@ function ArtifactDetail({
   approvals,
   onDecision,
   onOpenArtifact,
+  onResetBaseline,
+  isResettingBaseline,
+  baselineResetError,
 }: {
   artifact: ArtifactSummary | null;
   alternatives: ArtifactSummary[];
@@ -2115,6 +2194,9 @@ function ArtifactDetail({
     decision: "approved" | "rejected",
   ) => void;
   onOpenArtifact: (artifactId: string, targetPage: Page) => void;
+  onResetBaseline?: (artifact: ArtifactSummary) => Promise<void>;
+  isResettingBaseline?: boolean;
+  baselineResetError?: string | null;
 }) {
   const [content, setContent] = useState<string | null>(null);
   const [contentLoading, setContentLoading] = useState(false);
@@ -2204,8 +2286,31 @@ function ArtifactDetail({
             {artifact.id} · Revision {artifact.revision}
           </span>
         </div>
-        <StatusBadge status={artifact.status} />
+        <div className="detail-header-actions">
+          <StatusBadge status={artifact.status} />
+          {artifact.kind === "run_plan" && onResetBaseline && (
+            <button
+              className="secondary-button"
+              onClick={() => void onResetBaseline(artifact)}
+              disabled={isResettingBaseline}
+              aria-busy={isResettingBaseline}
+              title="Create a new revision using the current product HEAD"
+            >
+              {isResettingBaseline ? (
+                <Loader2 className="spin" size={14} />
+              ) : (
+                <RefreshCw size={14} />
+              )}
+              {isResettingBaseline ? "Resetting…" : "Reset baseline"}
+            </button>
+          )}
+        </div>
       </div>
+      {baselineResetError && (
+        <div className="error-note" role="alert">
+          {baselineResetError}
+        </div>
+      )}
       <div className="detail-meta">
         <span>
           <FileText size={14} />
@@ -4440,11 +4545,13 @@ function SettingsPage({
   capabilities,
   onUpdate,
   onResetRepository,
+  onResolveFactory,
 }: {
   profiles: PromptProfile[];
   capabilities: DashboardCapabilities;
   onUpdate: (profile: PromptProfile) => Promise<void>;
   onResetRepository: () => Promise<void>;
+  onResolveFactory: () => Promise<void>;
 }) {
   return (
     <>
@@ -4482,6 +4589,25 @@ function SettingsPage({
             onUpdate={onUpdate}
           />
         ))}
+        <div className="settings-action-zone">
+          <div>
+            <span className="section-kicker">FACTORY INPUTS</span>
+            <h2>Resolve factory.lock</h2>
+            <p>
+              Capture the current local factory repository, schemas, policy
+              packages, templates, instructions, Odoo settings, and quality
+              gates into the product lock file. This is intentionally manual
+              while the workflow is still evolving.
+            </p>
+          </div>
+          <button
+            className="secondary-button"
+            onClick={() => void onResolveFactory()}
+          >
+            <RefreshCw size={15} />
+            Run factory resolver
+          </button>
+        </div>
         <div className="settings-danger-zone">
           <div>
             <span className="section-kicker">DESTRUCTIVE ACTION</span>

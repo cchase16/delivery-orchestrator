@@ -429,6 +429,80 @@ describe("DeliveryRepository", () => {
     ).toBe(true);
   });
 
+  it("resets a run-plan product baseline as a new draft revision", async () => {
+    const config = await fixture();
+    await run("git", ["-C", config.productRepository, "init", "-q"]);
+    await run("git", [
+      "-C",
+      config.productRepository,
+      "config",
+      "user.email",
+      "test@example.invalid",
+    ]);
+    await run("git", [
+      "-C",
+      config.productRepository,
+      "config",
+      "user.name",
+      "Dashboard test",
+    ]);
+    await fs.writeFile(
+      path.join(config.productRepository, "README.md"),
+      "# Product\n",
+    );
+    await run("git", ["-C", config.productRepository, "add", "."]);
+    await run("git", [
+      "-C",
+      config.productRepository,
+      "commit",
+      "-qm",
+      "baseline",
+    ]);
+    const state = new RuntimeState(config.runtimeDirectory);
+    states.push(state);
+    config.schemaDirectory = path.resolve(process.cwd(), "../../../schemas");
+    const registry = new SchemaRegistry(config);
+    await registry.load();
+    const repository = new DeliveryRepository(config, state, registry);
+    const requirement = (await repository.snapshot()).artifacts.find(
+      (artifact) => artifact.kind === "requirement",
+    )!;
+    await repository.recordDecision({
+      artifactId: requirement.id,
+      kind: "requirement",
+      decision: "approved",
+    });
+    const runPlan = await repository.saveRunPlanDraft({
+      requirementId: requirement.id,
+      markdown: canonicalRunPlanMarkdown({ baseline: "a".repeat(40) }),
+    });
+    const productHead = (
+      await run("git", ["-C", config.productRepository, "rev-parse", "HEAD"])
+    ).stdout.trim();
+
+    const reset = await repository.resetRunPlanBaseline(runPlan.id);
+
+    expect(reset).toMatchObject({
+      kind: "run_plan",
+      revision: runPlan.revision + 1,
+      status: "draft",
+    });
+    const resetDocument = await repository.readArtifact(reset.id);
+    expect(resetDocument?.content).toContain(
+      `**Product baseline:** \`${productHead}\``,
+    );
+    const resetSidecar = JSON.parse(
+      await fs.readFile(
+        path.join(
+          config.deliveryRepository,
+          reset.path.replace(/\.md$/, ".sidecar.json"),
+        ),
+        "utf8",
+      ),
+    ) as { supersedes_revision?: number };
+    expect(resetSidecar.supersedes_revision).toBe(runPlan.revision);
+  });
+
   it("creates an isolated implementation worktree from the clean product baseline", async () => {
     const config = await fixture();
     await fs.mkdir(path.join(config.deliveryRepository, "system-plans"), {

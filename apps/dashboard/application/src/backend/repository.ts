@@ -27,6 +27,10 @@ import type { DashboardConfig } from "./config.js";
 import { RuntimeState } from "./state.js";
 import { resolveCodexRuntime } from "./codex-runtime.js";
 import type { SchemaRegistry } from "./validation.js";
+import {
+  resolveFactoryLock,
+  type FactoryResolutionResult,
+} from "./factory-resolver.js";
 
 const defaultProfiles: PromptProfile[] = [
   {
@@ -671,6 +675,67 @@ export class DeliveryRepository {
       contractCount: contractBindings.length,
       dirtyRepositories,
     };
+  }
+
+  async resolveFactoryLock(): Promise<FactoryResolutionResult> {
+    if (this.state.getActiveRun())
+      throw new Error(
+        "The factory lock cannot be changed during an active run.",
+      );
+
+    let systemYaml: Record<string, unknown>;
+    try {
+      systemYaml = parse(
+        await fs.readFile(
+          path.join(this.config.deliveryRepository, "system.yaml"),
+          "utf8",
+        ),
+      ) as Record<string, unknown>;
+    } catch {
+      throw new Error(
+        "system.yaml must be readable before resolving factory.lock.",
+      );
+    }
+    const repositories =
+      typeof systemYaml.repositories === "object" &&
+      systemYaml.repositories !== null
+        ? (systemYaml.repositories as Record<string, unknown>)
+        : {};
+    const developmentFactory = repositories.development_factory;
+    const configuredPath =
+      typeof developmentFactory === "object" &&
+      developmentFactory !== null &&
+      typeof (developmentFactory as Record<string, unknown>).local_path ===
+        "string"
+        ? String(
+            (developmentFactory as Record<string, unknown>).local_path,
+          ).trim()
+        : "";
+    if (!configuredPath)
+      throw new Error(
+        "system.yaml does not define repositories.development_factory.local_path.",
+      );
+    const factoryRepository = path.resolve(
+      this.config.deliveryRepository,
+      configuredPath,
+    );
+    if (!(await exists(factoryRepository)))
+      throw new Error(
+        `The configured development factory repository does not exist: ${configuredPath}`,
+      );
+
+    const result = await resolveFactoryLock({
+      productRepository: this.config.productRepository,
+      factoryRepository,
+      writeFile: (filePath, content) => this.writeDurable(filePath, content),
+    });
+    this.state.recordAction("factory_lock_resolved", {
+      resolvedAt: result.resolvedAt,
+      configurationSha256: result.configurationSha256,
+      factoryRevision: result.factoryRevision,
+      qualityGateCount: result.qualityGateCount,
+    });
+    return result;
   }
 
   startWatcher(onChange?: () => void): () => void {
@@ -3652,6 +3717,7 @@ export class DeliveryRepository {
       run_plan_id: id,
       revision,
       status: "draft",
+      ...(predecessor ? { supersedes_revision: predecessor.revision } : {}),
       requirement: {
         id: requirement.id,
         revision: requirement.revision,
@@ -3706,6 +3772,37 @@ export class DeliveryRepository {
       status: "draft",
       updatedAt: stat.mtime.toISOString(),
     };
+  }
+
+  async resetRunPlanBaseline(runPlanId: string): Promise<ArtifactSummary> {
+    const snapshot = await this.snapshot();
+    const runPlan = snapshot.artifacts.find(
+      (artifact) => artifact.id === runPlanId && artifact.kind === "run_plan",
+    );
+    if (!runPlan) throw new Error(`Run plan not found: ${runPlanId}`);
+    if (!runPlan.relatedRequirementId)
+      throw new Error("Run plan is not linked to an approved requirement.");
+    const document = await this.readArtifact(runPlan.id);
+    if (!document?.content)
+      throw new Error("Run-plan Markdown is unavailable.");
+    const git = await this.inspectGit();
+    if (!git.available || !git.head)
+      throw new Error("Unable to resolve the current product baseline commit.");
+    const baselinePattern =
+      /^(\*\*Product baseline:\*\*\s*`)[A-Fa-f0-9]{7,64}(`\s*)$/im;
+    if (!baselinePattern.test(document.content))
+      throw new Error("Run-plan Markdown does not contain a product baseline.");
+    const markdown = document.content.replace(
+      baselinePattern,
+      `$1${git.head}$2`,
+    );
+    if (markdown === document.content)
+      throw new Error("Run plan already uses the current product baseline.");
+    return this.saveRunPlanDraft({
+      requirementId: runPlan.relatedRequirementId,
+      markdown,
+      supersedesRunPlanId: runPlan.id,
+    });
   }
 
   private async configuredDirectory(
@@ -4127,6 +4224,31 @@ export class DeliveryRepository {
 
   getRun(runId: string): ActiveRun | null {
     return this.state.getRun(runId);
+  }
+
+  async removeRunWorktree(run: ActiveRun): Promise<void> {
+    if (!run.worktreePath) return;
+    const worktreePath = path.resolve(run.worktreePath);
+    const managedRoot = path.resolve(this.config.runtimeDirectory, "worktrees");
+    const relativePath = path.relative(managedRoot, worktreePath);
+    if (
+      !relativePath ||
+      relativePath.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relativePath)
+    )
+      throw new Error("Run worktree is outside the managed runtime directory.");
+    await execFileAsync(
+      "git",
+      [
+        "-C",
+        this.config.productRepository,
+        "worktree",
+        "remove",
+        "--force",
+        worktreePath,
+      ],
+      { timeout: 15000 },
+    );
   }
 
   async startRun(input: {

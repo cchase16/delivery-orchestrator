@@ -418,6 +418,9 @@ Complete only after all checks pass.
       status: "blocked",
       currentTask: expect.stringContaining("Active turn cancelled"),
     });
+    await expect(
+      fs.access(cancelledRun.value.worktreePath),
+    ).resolves.toBeUndefined();
     const snapshotAfterTurnCancellation = await request(port, "/api/snapshot");
     expect(snapshotAfterTurnCancellation.value.activeRun).toMatchObject({
       runId: cancelledRun.value.runId,
@@ -437,6 +440,21 @@ Complete only after all checks pass.
       runId: cancelledRun.value.runId,
       status: "cancelled",
     });
+    await expect(
+      fs.access(cancelledRun.value.worktreePath),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    const worktreesAfterCancellation = await run("git", [
+      "-C",
+      product,
+      "worktree",
+      "list",
+      "--porcelain",
+    ]);
+    expect(worktreesAfterCancellation.stdout).not.toContain(
+      cancelledRun.value.worktreePath.replaceAll("\\", "/"),
+    );
     const snapshotAfterCancellation = await request(port, "/api/snapshot");
     expect(snapshotAfterCancellation.value.activeRun).toBeNull();
     const started = await request(port, "/api/runs", {

@@ -965,6 +965,13 @@ h2 {
   justify-content: space-between;
   gap: 15px;
 }
+.detail-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 .detail-header h2 {
   font-size: 21px;
   margin-top: 8px;
@@ -1731,6 +1738,27 @@ h2 {
 .save-profile {
   margin-top: 14px;
 }
+.settings-action-zone {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin-top: 18px;
+  padding: 22px 0 12px;
+  border-top: 1px solid #e7ebf0;
+}
+.settings-action-zone h2 {
+  margin: 6px 0 0;
+  font-size: 14px;
+  color: #324760;
+}
+.settings-action-zone p {
+  max-width: 650px;
+  margin: 6px 0 0;
+  color: #75869a;
+  font-size: 11px;
+  line-height: 1.55;
+}
 .settings-danger-zone {
   display: flex;
   align-items: center;
@@ -2080,6 +2108,10 @@ h2 {
   }
   .save-profile {
     margin-top: 0;
+  }
+  .settings-action-zone {
+    align-items: flex-start;
+    flex-direction: column;
   }
   .settings-danger-zone {
     align-items: flex-start;
