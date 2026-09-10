@@ -18,7 +18,7 @@ The orchestrator coordinates work but does not contain customer-specific deliver
 
 Requirements-factory intermediate formats and Odoo-specific implementation formats remain owned by their respective factory repositories.
 
-<img width="2832" height="1512" alt="image" src="https://github.com/user-attachments/assets/dbc42364-1cb2-4e3d-ad40-b4dc18fdedac" />
+<img width="2856" height="1520" alt="image" src="https://github.com/user-attachments/assets/6359f9da-7f44-401b-a5f7-68989f577ee7" />
 
 <br>
 
