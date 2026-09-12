@@ -1,0 +1,26 @@
+schema_version: 1
+questionnaire_id: QNR-EXAMPLE-001
+run_id: RUN-EXAMPLE-001
+work_package_id: WP-EXAMPLE-001
+run_plan_id: RP-EXAMPLE-001
+run_plan_revision: 1
+phase_id: PH-02
+task_id: TASK-02-01
+status: awaiting_input
+revision: 1
+created_at: 2026-09-11T13:00:00.000Z
+updated_at: 2026-09-11T13:00:00.000Z
+questions:
+  - id: Q-001
+    status: open
+    blocking: true
+    question: Which supported Odoo version should this phase target?
+    reason: The implementation hook differs by major version.
+    answer_type: single_choice
+    options:
+      - Odoo 17
+      - Odoo 18
+    recommended_answer: Odoo 18
+    answer: null
+    answered_by: null
+    answered_at: null

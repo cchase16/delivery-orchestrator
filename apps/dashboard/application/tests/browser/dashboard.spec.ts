@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { expect, test } from "@playwright/test";
 
 test("operator can move through the planning views", async ({ page }) => {
@@ -23,6 +25,360 @@ test("operator can move through the planning views", async ({ page }) => {
   await expect(
     page.getByRole("heading", { name: "Prompt profiles" }),
   ).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("completed run-plan generation is recovered after navigation", async ({
+  page,
+}) => {
+  const requirement = {
+    id: "REQ-BROWSER-RECOVER",
+    title: "Browser recovery requirement",
+    kind: "requirement",
+    path: "requirements/browser-recovery.md",
+    extension: ".md",
+    revision: 1,
+    digest: "browser-recovery-digest",
+    status: "approved",
+    updatedAt: "2026-09-11T12:00:00.000Z",
+  };
+  const output =
+    "```markdown\n# Browser recovered implementation plan\n\nComplete plan content.\n```";
+  let savedBody: Record<string, unknown> | undefined;
+  await page.route("**/api/snapshot", async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        generatedAt: "2026-09-11T12:00:00.000Z",
+        system: {
+          id: "browser-test",
+          name: "Browser test",
+          branch: "main",
+          deliveryPath: "delivery",
+          lockStatus: "resolved",
+        },
+        health: [],
+        artifacts: [requirement],
+        approvals: [],
+        activeRun: null,
+        promptProfiles: [
+          {
+            taskType: "run_plan_generation",
+            label: "Run-plan generation",
+            model: "gpt-5.6-sol",
+            reasoningEffort: "medium",
+            promptMode: "standard",
+            adapter: "codex_app_server",
+          },
+        ],
+        blockers: [],
+      }),
+    }),
+  );
+  await page.route("**/api/capabilities", async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        models: ["gpt-5.6-sol"],
+        reasoningEfforts: ["medium"],
+        adapters: [],
+      }),
+    }),
+  );
+  await page.route("**/api/prompt-tasks", async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        tasks: [
+          {
+            taskId: "THREAD-BROWSER-RECOVER",
+            taskType: "run_plan_generation",
+            status: "completed",
+            output,
+            events: [],
+            adapter: "codex_app_server",
+            model: "gpt-5.6-sol",
+            reasoningEffort: "medium",
+            startedAt: "2026-09-11T12:01:00.000Z",
+            inputArtifactIds: [requirement.id],
+            promptMode: "standard",
+            templateVersion: "run-plan-generation.v3",
+            redactionApplied: false,
+          },
+        ],
+      }),
+    }),
+  );
+  await page.route(
+    "**/api/prompt-tasks/THREAD-BROWSER-RECOVER",
+    async (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "completed", output, events: [] }),
+      }),
+  );
+  await page.route("**/api/artifacts/REQ-BROWSER-RECOVER", async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        artifact: requirement,
+        content: "# Browser recovery requirement",
+        contentType: "text/markdown",
+        previewable: true,
+      }),
+    }),
+  );
+  await page.route("**/api/run-plans/drafts", async (route) => {
+    savedBody = JSON.parse(route.request().postData() ?? "{}");
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: "RP-BROWSER-RECOVER",
+        path: "run-plans/RP-BROWSER-RECOVER.md",
+      }),
+    });
+  });
+
+  await page.goto("/");
+  await page
+    .getByRole("button", { name: "Design documents", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Completed run-plan generation" }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Run-plan Markdown")).toHaveValue(
+    /# Browser recovered implementation plan/,
+  );
+  await page.screenshot({
+    path: path.join(os.tmpdir(), "dashboard-run-plan-recovery-fixed.png"),
+    fullPage: true,
+  });
+  await page.getByRole("button", { name: "Validate and save draft" }).click();
+  await expect
+    .poll(() => savedBody)
+    .toEqual({
+      requirementId: requirement.id,
+      markdown:
+        "# Browser recovered implementation plan\n\nComplete plan content.",
+    });
+});
+
+test("operator answers a blocking questionnaire and resumes execution", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(message.text());
+  });
+  let questionnaireOpen = true;
+  let runStatus = "blocked";
+  let answerRequest: Record<string, unknown> | undefined;
+  let controlRequest: Record<string, unknown> | undefined;
+  const questionnaire = {
+    schema_version: 1,
+    questionnaire_id: "QNR-BROWSER-001",
+    run_id: "RUN-BROWSER-001",
+    work_package_id: "WP-BROWSER-001",
+    run_plan_id: "RP-BROWSER-001",
+    run_plan_revision: 1,
+    phase_id: "PH-02",
+    task_id: "TASK-02-01",
+    status: "awaiting_input",
+    revision: 1,
+    created_at: "2026-09-11T13:00:00.000Z",
+    updated_at: "2026-09-11T13:00:00.000Z",
+    questions: [
+      {
+        id: "Q-001",
+        status: "open",
+        blocking: true,
+        question: "Which Odoo version should the phase target?",
+        reason: "The framework hook differs by version.",
+        answer_type: "single_choice",
+        options: ["Odoo 17", "Odoo 18"],
+        recommended_answer: "Odoo 18",
+        answer: null,
+        answered_by: null,
+        answered_at: null,
+      },
+      {
+        id: "Q-002",
+        status: "open",
+        blocking: true,
+        question: "What compatibility behavior is required?",
+        reason: "The fallback behavior is not specified.",
+        answer_type: "text",
+        answer: null,
+        answered_by: null,
+        answered_at: null,
+      },
+    ],
+  };
+  await page.route("**/api/snapshot", async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        generatedAt: new Date().toISOString(),
+        system: {
+          id: "browser-test",
+          name: "Browser test",
+          branch: "main",
+          deliveryPath: "delivery",
+          lockStatus: "resolved",
+        },
+        health: [],
+        artifacts: [],
+        approvals: [],
+        activeRun: {
+          runId: "RUN-BROWSER-001",
+          workPackageId: "WP-BROWSER-001",
+          title: "Questionnaire implementation",
+          startedAt: "2026-09-11T12:55:00.000Z",
+          sequence: 1,
+          total: 1,
+          currentPhase: "PH-02 · Compatibility",
+          currentTask: "Awaiting operator answers",
+          progress: 35,
+          status: runStatus,
+          model: "gpt-5.6-luna",
+          reasoningEffort: "high",
+          taskId: "TASK-BROWSER-QUESTION",
+          adapter: "fake",
+        },
+        promptProfiles: [],
+        blockers: [],
+      }),
+    }),
+  );
+  await page.route("**/api/capabilities", async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        models: ["gpt-5.6-luna"],
+        reasoningEfforts: ["high"],
+        adapters: [],
+      }),
+    }),
+  );
+  await page.route("**/api/runs/RUN-BROWSER-001/progress", async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        schema_version: 1,
+        run_id: "RUN-BROWSER-001",
+        work_package_id: "WP-BROWSER-001",
+        run_plan_id: "RP-BROWSER-001",
+        run_plan_revision: 1,
+        status: "blocked",
+        current_phase_id: "PH-02",
+        current_task_id: "TASK-02-01",
+        phases: [{ phase_id: "PH-02", status: "blocked" }],
+        tasks: [{ task_id: "TASK-02-01", status: "blocked" }],
+      }),
+    }),
+  );
+  await page.route("**/api/runs/RUN-BROWSER-001/questions", async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        questionnaire: questionnaireOpen ? questionnaire : null,
+      }),
+    }),
+  );
+  await page.route(
+    "**/api/runs/RUN-BROWSER-001/questions/answers",
+    async (route) => {
+      answerRequest = JSON.parse(route.request().postData() ?? "{}");
+      questionnaire.status = "answered";
+      questionnaire.revision = 2;
+      questionnaire.questions.forEach((question) => {
+        question.status = "answered";
+        question.answer = String(
+          (answerRequest?.answers as Record<string, string>)[question.id],
+        );
+      });
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(questionnaire),
+      });
+    },
+  );
+  await page.route("**/api/runs/RUN-BROWSER-001/control", async (route) => {
+    controlRequest = JSON.parse(route.request().postData() ?? "{}");
+    runStatus = "in_progress";
+    questionnaireOpen = false;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ status: runStatus }),
+    });
+  });
+  await page.route("**/api/prompt-tasks/TASK-BROWSER-QUESTION", async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        taskId: "TASK-BROWSER-QUESTION",
+        status: "completed",
+        output: "Waiting for operator input.",
+        events: [],
+      }),
+    }),
+  );
+
+  await page.goto("/");
+  await expect(page).toHaveTitle(/Factory Dashboard/);
+  await page.getByRole("button", { name: "Active Runs", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Answer blocking questions" }),
+  ).toBeVisible();
+  const resumeButton = page.getByRole("button", {
+    name: "Save answers and resume",
+  });
+  await expect(resumeButton).toBeDisabled();
+  await page
+    .getByLabel(/Which Odoo version should the phase target/)
+    .selectOption("Odoo 18");
+  await page
+    .getByLabel(/What compatibility behavior is required/)
+    .fill("Use the documented fallback on older supported databases.");
+  await expect(resumeButton).toBeEnabled();
+  await page.screenshot({
+    path: path.join(os.tmpdir(), "dashboard-questionnaire-ready.png"),
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 600, height: 900 });
+  await page.waitForTimeout(250);
+  await expect(resumeButton).toBeVisible();
+  await page.screenshot({
+    path: path.join(os.tmpdir(), "dashboard-questionnaire-mobile.png"),
+    fullPage: true,
+  });
+  await resumeButton.click();
+  await expect
+    .poll(() => answerRequest)
+    .toEqual({
+      questionnaireId: "QNR-BROWSER-001",
+      answers: {
+        "Q-001": "Odoo 18",
+        "Q-002": "Use the documented fallback on older supported databases.",
+      },
+    });
+  await expect.poll(() => controlRequest).toEqual({ action: "resume" });
+  await expect(
+    page.getByRole("heading", { name: "Answer blocking questions" }),
+  ).not.toBeVisible();
   expect(errors).toEqual([]);
 });
 

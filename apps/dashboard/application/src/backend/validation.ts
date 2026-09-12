@@ -29,6 +29,7 @@ export class SchemaRegistry {
       "work-packages/sequence-proposal.schema.json",
       "model-profiles/model-profile.schema.json",
       "executions/execution-progress.schema.json",
+      "executions/execution-questionnaire.schema.json",
       "evidence/validation-evidence.schema.json",
       "evidence/result-disposition.schema.json",
       "system-plans/system-plan.schema.json",

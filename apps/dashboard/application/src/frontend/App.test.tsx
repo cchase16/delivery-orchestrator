@@ -49,7 +49,7 @@ describe("dashboard shell", () => {
     render(<App />);
 
     await screen.findByRole("heading", { name: "Overview" });
-    fireEvent.click(screen.getByRole("button", { name: "Requirements" }));
+    fireEvent.click(screen.getByRole("button", { name: "Design documents" }));
     fireEvent.change(screen.getByLabelText("Filter artifacts by status"), {
       target: { value: "approved" },
     });
@@ -164,5 +164,103 @@ describe("dashboard shell", () => {
     expect(
       await screen.findByText("Repository decisions and gates reset"),
     ).toBeTruthy();
+  });
+
+  it("recovers completed run-plan output for the selected requirement", async () => {
+    const requirement = {
+      id: "REQ-RECOVER",
+      title: "Recoverable design",
+      kind: "requirement" as const,
+      path: "requirements/recover.md",
+      extension: ".md",
+      revision: 1,
+      digest: "abc123",
+      status: "approved" as const,
+      updatedAt: "2026-09-11T12:00:00.000Z",
+    };
+    const snapshot: Snapshot = {
+      ...liveSnapshot,
+      artifacts: [requirement],
+      promptProfiles: [
+        {
+          taskType: "run_plan_generation",
+          label: "Run-plan generation",
+          model: "gpt-5.6-sol",
+          reasoningEffort: "medium",
+          promptMode: "standard",
+          adapter: "codex_app_server",
+        },
+      ],
+    };
+    const output =
+      "```markdown\n# Recovered implementation plan\n\nFull output.\n```";
+    let savedBody: Record<string, unknown> | undefined;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      let body: unknown = {};
+      if (url === "/api/snapshot") body = snapshot;
+      else if (url === "/api/capabilities")
+        body = {
+          models: ["gpt-5.6-sol"],
+          reasoningEfforts: ["medium"],
+          adapters: [],
+        };
+      else if (url === "/api/prompt-tasks")
+        body = {
+          tasks: [
+            {
+              taskId: "THREAD-RECOVER",
+              taskType: "run_plan_generation",
+              status: "completed",
+              output,
+              events: [],
+              adapter: "codex_app_server",
+              model: "gpt-5.6-sol",
+              reasoningEffort: "medium",
+              startedAt: "2026-09-11T12:01:00.000Z",
+              inputArtifactIds: [requirement.id],
+              promptMode: "standard",
+              templateVersion: "run-plan-generation.v3",
+              redactionApplied: false,
+            },
+          ],
+        };
+      else if (url === "/api/prompt-tasks/THREAD-RECOVER")
+        body = { status: "completed", output, events: [] };
+      else if (url === "/api/artifacts/REQ-RECOVER")
+        body = {
+          artifact: requirement,
+          content: "# Recoverable design",
+          contentType: "text/markdown",
+          previewable: true,
+        };
+      else if (url === "/api/run-plans/drafts") {
+        savedBody = JSON.parse(String(init?.body));
+        body = { id: "RP-RECOVER", path: "run-plans/RP-RECOVER.md" };
+      }
+      return { ok: true, status: 200, json: async () => body } as Response;
+    });
+
+    render(<App />);
+    await screen.findByRole("heading", { name: "Overview" });
+    fireEvent.click(screen.getByRole("button", { name: "Design documents" }));
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Completed run-plan generation",
+      }),
+    ).toBeTruthy();
+    expect(
+      (screen.getByLabelText("Run-plan Markdown") as HTMLTextAreaElement).value,
+    ).toContain("# Recovered implementation plan");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Validate and save draft" }),
+    );
+    await waitFor(() =>
+      expect(savedBody).toEqual({
+        requirementId: requirement.id,
+        markdown: "# Recovered implementation plan\n\nFull output.",
+      }),
+    );
   });
 });

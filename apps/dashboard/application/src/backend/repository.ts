@@ -12,6 +12,7 @@ import type {
   ArtifactSummary,
   ApprovalSummary,
   DispositionSummary,
+  ExecutionQuestionnaire,
   ExecutionProgress,
   EvidenceSummary,
   PreflightResult,
@@ -2255,12 +2256,7 @@ export class DeliveryRepository {
         input.tasks.filter((task) => task.status === "complete").length /
         Math.max(1, input.tasks.length);
       this.updateRun(input.run_id, {
-        status:
-          input.status === "blocked" || input.status === "failed"
-            ? input.status
-            : input.status === "cancelled"
-              ? "cancelled"
-              : "in_progress",
+        status: input.status === "cancelled" ? "cancelled" : "in_progress",
         currentPhase: input.current_phase_id ?? run.currentPhase,
         currentTask: input.current_task_id ?? run.currentTask,
         progress: Math.round(
@@ -2698,6 +2694,252 @@ export class DeliveryRepository {
     } catch {
       return null;
     }
+  }
+
+  private executionQuestionnaireDirectory(runId: string): string {
+    if (!/^RUN-[A-Za-z0-9][A-Za-z0-9._-]{2,127}$/.test(runId))
+      throw new Error(`Invalid run identifier: ${runId}`);
+    return path.join(
+      this.config.deliveryRepository,
+      "runs",
+      runId,
+      "questions",
+    );
+  }
+
+  private validateExecutionQuestionnaire(
+    questionnaire: ExecutionQuestionnaire,
+  ): void {
+    if (!this.schemaRegistry)
+      throw new Error(
+        "Schema registry is required to save execution questionnaires.",
+      );
+    const validation = this.schemaRegistry.validate(
+      "urn:odoo-development-factory:schema:execution-questionnaire:1",
+      questionnaire,
+    );
+    if (!validation.valid)
+      throw new Error(
+        `Execution questionnaire is invalid: ${validation.errors.map((error) => `${error.path} ${error.message}`).join("; ")}`,
+      );
+  }
+
+  async listExecutionQuestionnaires(
+    runId: string,
+  ): Promise<ExecutionQuestionnaire[]> {
+    const directory = this.executionQuestionnaireDirectory(runId);
+    let files: string[];
+    try {
+      files = (await fs.readdir(directory))
+        .filter((file) => /\.ya?ml$/i.test(file))
+        .sort();
+    } catch {
+      return [];
+    }
+    const questionnaires = await Promise.all(
+      files.map(async (file) => {
+        const value = parse(
+          await fs.readFile(path.join(directory, file), "utf8"),
+        ) as ExecutionQuestionnaire;
+        this.validateExecutionQuestionnaire(value);
+        if (value.run_id !== runId)
+          throw new Error(
+            `Questionnaire ${value.questionnaire_id} targets a different run.`,
+          );
+        return value;
+      }),
+    );
+    return [...questionnaires].sort((left, right) =>
+      left.created_at.localeCompare(right.created_at),
+    );
+  }
+
+  async readCurrentExecutionQuestionnaire(
+    runId: string,
+  ): Promise<ExecutionQuestionnaire | null> {
+    const questionnaires = await this.listExecutionQuestionnaires(runId);
+    return (
+      [...questionnaires]
+        .reverse()
+        .find((questionnaire) => questionnaire.status !== "resumed") ?? null
+    );
+  }
+
+  async createExecutionQuestionnaire(input: {
+    runId: string;
+    phaseId: string;
+    taskId: string;
+    questions: Array<{
+      id: string;
+      blocking: true;
+      question: string;
+      reason: string;
+      answer_type: "text" | "single_choice";
+      options?: string[];
+      recommended_answer?: string;
+    }>;
+  }): Promise<ExecutionQuestionnaire> {
+    const run = this.state.getRun(input.runId);
+    if (!run) throw new Error(`Run not found: ${input.runId}`);
+    const progress = await this.syncExecutionProgress(input.runId);
+    if (!progress) throw new Error("Execution progress is missing.");
+    if (
+      progress.current_phase_id !== input.phaseId ||
+      progress.current_task_id !== input.taskId
+    )
+      throw new Error(
+        "Questionnaire phase/task does not match current execution progress.",
+      );
+    const existing = await this.readCurrentExecutionQuestionnaire(input.runId);
+    if (
+      existing?.status === "awaiting_input" &&
+      existing.phase_id === input.phaseId &&
+      existing.task_id === input.taskId
+    )
+      return existing;
+    const now = new Date().toISOString();
+    const questionnaire: ExecutionQuestionnaire = {
+      schema_version: 1,
+      questionnaire_id: stableArtifactId(
+        "QNR",
+        input.runId,
+        input.phaseId,
+        input.taskId,
+        JSON.stringify(input.questions),
+      ),
+      run_id: input.runId,
+      work_package_id: progress.work_package_id,
+      run_plan_id: progress.run_plan_id,
+      run_plan_revision: progress.run_plan_revision,
+      phase_id: input.phaseId,
+      task_id: input.taskId,
+      status: "awaiting_input",
+      revision: 1,
+      created_at: now,
+      updated_at: now,
+      questions: input.questions.map((question) => ({
+        ...question,
+        status: "open",
+        answer: null,
+        answered_by: null,
+        answered_at: null,
+      })),
+    };
+    this.validateExecutionQuestionnaire(questionnaire);
+    const directory = this.executionQuestionnaireDirectory(input.runId);
+    const filePath = path.join(
+      directory,
+      `${questionnaire.questionnaire_id}.yaml`,
+    );
+    await fs.mkdir(directory, { recursive: true });
+    await this.writeDurable(filePath, stringify(questionnaire));
+    this.state.recordAction(
+      "execution_questionnaire_created",
+      {
+        runId: input.runId,
+        questionnaireId: questionnaire.questionnaire_id,
+        path: path
+          .relative(this.config.deliveryRepository, filePath)
+          .replaceAll("\\", "/"),
+        phaseId: input.phaseId,
+        taskId: input.taskId,
+      },
+      `questionnaire:${questionnaire.questionnaire_id}:1`,
+    );
+    return questionnaire;
+  }
+
+  async answerExecutionQuestionnaire(input: {
+    runId: string;
+    questionnaireId: string;
+    answers: Record<string, string>;
+    answeredBy?: string;
+  }): Promise<ExecutionQuestionnaire> {
+    const current = await this.readCurrentExecutionQuestionnaire(input.runId);
+    if (!current || current.questionnaire_id !== input.questionnaireId)
+      throw new Error("The current execution questionnaire was not found.");
+    if (current.status !== "awaiting_input")
+      throw new Error("Questionnaire answers are already final.");
+    const now = new Date().toISOString();
+    const questions = current.questions.map((question) => {
+      const answer = input.answers[question.id]?.trim() ?? "";
+      if (!answer) throw new Error(`An answer is required for ${question.id}.`);
+      if (
+        question.answer_type === "single_choice" &&
+        !question.options?.includes(answer)
+      )
+        throw new Error(
+          `Answer for ${question.id} must be one of its options.`,
+        );
+      return {
+        ...question,
+        status: "answered" as const,
+        answer,
+        answered_by: input.answeredBy?.trim() || "local-operator",
+        answered_at: now,
+      };
+    });
+    const answered: ExecutionQuestionnaire = {
+      ...current,
+      status: "answered",
+      revision: current.revision + 1,
+      updated_at: now,
+      questions,
+    };
+    this.validateExecutionQuestionnaire(answered);
+    const filePath = path.join(
+      this.executionQuestionnaireDirectory(input.runId),
+      `${answered.questionnaire_id}.yaml`,
+    );
+    await this.writeDurable(filePath, stringify(answered));
+    this.state.recordAction(
+      "execution_questionnaire_answered",
+      {
+        runId: input.runId,
+        questionnaireId: answered.questionnaire_id,
+        revision: answered.revision,
+        questionIds: answered.questions.map((question) => question.id),
+      },
+      `questionnaire:${answered.questionnaire_id}:${answered.revision}`,
+    );
+    return answered;
+  }
+
+  async markExecutionQuestionnaireResumed(
+    runId: string,
+    questionnaireId: string,
+  ): Promise<ExecutionQuestionnaire> {
+    const current = await this.readCurrentExecutionQuestionnaire(runId);
+    if (!current || current.questionnaire_id !== questionnaireId)
+      throw new Error("The answered execution questionnaire was not found.");
+    if (current.status !== "answered")
+      throw new Error(
+        "Every questionnaire answer must be final before resume.",
+      );
+    const now = new Date().toISOString();
+    const resumed: ExecutionQuestionnaire = {
+      ...current,
+      status: "resumed",
+      revision: current.revision + 1,
+      updated_at: now,
+      resumed_at: now,
+    };
+    this.validateExecutionQuestionnaire(resumed);
+    const filePath = path.join(
+      this.executionQuestionnaireDirectory(runId),
+      `${resumed.questionnaire_id}.yaml`,
+    );
+    await this.writeDurable(filePath, stringify(resumed));
+    this.state.recordAction(
+      "execution_questionnaire_resumed",
+      {
+        runId,
+        questionnaireId,
+        revision: resumed.revision,
+      },
+      `questionnaire:${questionnaireId}:${resumed.revision}`,
+    );
+    return resumed;
   }
 
   async hasPassedValidationEvidence(

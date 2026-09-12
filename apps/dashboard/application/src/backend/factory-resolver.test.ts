@@ -31,7 +31,7 @@ describe("factory resolver", () => {
       path.join(product, "factory.yaml"),
       [
         "odoo:",
-        "  version: 19.0",
+        '  version: "19.0"',
         "  edition: community",
         "  addon_paths: [addons]",
         "quality_gates:",

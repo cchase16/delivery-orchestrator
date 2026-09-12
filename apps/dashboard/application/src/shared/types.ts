@@ -215,6 +215,37 @@ export interface ExecutionProgress {
   updated_at?: string;
 }
 
+export interface ExecutionQuestion {
+  id: string;
+  status: "open" | "answered";
+  blocking: true;
+  question: string;
+  reason: string;
+  answer_type: "text" | "single_choice";
+  options?: string[];
+  recommended_answer?: string;
+  answer: string | null;
+  answered_by: string | null;
+  answered_at: string | null;
+}
+
+export interface ExecutionQuestionnaire {
+  schema_version: 1;
+  questionnaire_id: string;
+  run_id: string;
+  work_package_id: string;
+  run_plan_id: string;
+  run_plan_revision: number;
+  phase_id: string;
+  task_id: string;
+  status: "awaiting_input" | "answered" | "resumed";
+  revision: number;
+  created_at: string;
+  updated_at: string;
+  resumed_at?: string;
+  questions: ExecutionQuestion[];
+}
+
 export interface ActiveRun {
   runId: string;
   workPackageId: string;

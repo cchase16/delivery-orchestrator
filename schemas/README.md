@@ -35,6 +35,7 @@ Schema changes must define their compatibility and migration behavior.
 - `work-packages/work-package.schema.json`
 - `model-profiles/model-profile.schema.json`
 - `executions/execution-progress.schema.json`
+- `executions/execution-questionnaire.schema.json`
 - `evidence/validation-evidence.schema.json`
 - `acceptance-traceability/acceptance-traceability.schema.json`
 

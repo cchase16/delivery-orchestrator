@@ -17,6 +17,7 @@ import type {
 } from "../shared/types.js";
 import {
   CodexAppServerAdapter,
+  extractExecutionQuestionnaire,
   FakeExecutionAdapter,
   PromptBuilder,
   resolveEffectiveProfile,
@@ -68,10 +69,63 @@ type PromptTaskSummary = CodexTaskSnapshot & {
   model: string;
   reasoningEffort: string;
   startedAt: string;
+  inputArtifactIds: string[];
+  promptMode: string;
+  templateVersion: string;
+  redactionApplied: boolean;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function executionProgressBlocker(
+  progress: ExecutionProgress | null,
+): { status: "blocked" | "failed"; message: string } | undefined {
+  if (!progress) return undefined;
+  const blockedTask = progress.tasks.find((task) => task.status === "blocked");
+  const blockedPhase = progress.phases?.find(
+    (phase) => phase.status === "blocked",
+  );
+  if (progress.status === "failed")
+    return {
+      status: "failed",
+      message:
+        blockedTask?.note ??
+        blockedPhase?.note ??
+        "Execution progress reports a failure.",
+    };
+  if (progress.status === "blocked" || blockedTask || blockedPhase)
+    return {
+      status: "blocked",
+      message:
+        blockedTask?.note ??
+        blockedPhase?.note ??
+        "Execution progress reports a blocker.",
+    };
+  return undefined;
+}
+
+async function persistExecutionQuestionnaire(
+  run: ActiveRun,
+  progress: ExecutionProgress,
+  output: string,
+) {
+  const draft = extractExecutionQuestionnaire(output);
+  if (!draft) return null;
+  if (
+    draft.phase_id !== progress.current_phase_id ||
+    draft.task_id !== progress.current_task_id
+  )
+    throw new Error(
+      "Questionnaire phase/task does not match current execution progress.",
+    );
+  return repository.createExecutionQuestionnaire({
+    runId: run.runId,
+    phaseId: draft.phase_id,
+    taskId: draft.task_id,
+    questions: draft.questions,
+  });
 }
 
 async function listPromptTasks(): Promise<PromptTaskSummary[]> {
@@ -107,6 +161,15 @@ async function listPromptTasks(): Promise<PromptTaskSummary[]> {
         actual?.reasoningEffort ?? requested?.reasoningEffort ?? "unknown",
       ),
       startedAt: action.createdAt,
+      inputArtifactIds: Array.isArray(action.payload.inputArtifacts)
+        ? action.payload.inputArtifacts
+            .filter(isRecord)
+            .map((artifact) => String(artifact.id ?? ""))
+            .filter(Boolean)
+        : [],
+      promptMode: String(action.payload.promptMode ?? "standard"),
+      templateVersion: String(action.payload.templateVersion ?? "unknown"),
+      redactionApplied: Boolean(action.payload.redactionApplied),
     });
     if (summaries.length >= 25) break;
   }
@@ -221,6 +284,13 @@ async function dispatchImplementationPhase(
     throw new Error("Run-plan execution profile is not configured.");
   if (!run.worktreePath || !run.baseCommit || !run.branch)
     throw new Error("Run did not receive an isolated product worktree.");
+  const questionnaire = await repository.readCurrentExecutionQuestionnaire(
+    run.runId,
+  );
+  if (questionnaire?.status === "awaiting_input")
+    throw new Error(
+      "Resume blocked: answer every required questionnaire item first.",
+    );
   const packet = await promptBuilder.preview(
     "run_plan_execution",
     [runPlanId],
@@ -240,6 +310,18 @@ async function dispatchImplementationPhase(
       firstTaskTitle: execution.firstTaskTitle,
       phaseOrdinal: execution.phaseOrdinal,
       phaseCount: execution.phaseCount,
+      ...(questionnaire?.status === "answered"
+        ? {
+            questionnaire: {
+              path: `runs/${run.runId}/questions/${questionnaire.questionnaire_id}.yaml`,
+              questions: questionnaire.questions.map((question) => ({
+                id: question.id,
+                question: question.question,
+                answer: question.answer ?? "",
+              })),
+            },
+          }
+        : {}),
     },
   );
   packet.executionContext = {
@@ -281,6 +363,11 @@ async function dispatchImplementationPhase(
     phases: execution.progress.phases,
     tasks: execution.progress.tasks,
   });
+  if (questionnaire?.status === "answered")
+    await repository.markExecutionQuestionnaireResumed(
+      run.runId,
+      questionnaire.questionnaire_id,
+    );
   state.recordAction(
     "implementation_phase_started",
     {
@@ -538,6 +625,48 @@ app.get<{ Params: { runId: string } }>(
   async (request) => repository.readExecutionProgress(request.params.runId),
 );
 app.get<{ Params: { runId: string } }>(
+  "/api/runs/:runId/questions",
+  async (request, reply) => {
+    try {
+      return {
+        questionnaire: await repository.readCurrentExecutionQuestionnaire(
+          request.params.runId,
+        ),
+      };
+    } catch (cause) {
+      return reply.code(409).send({
+        error:
+          cause instanceof Error
+            ? cause.message
+            : "Unable to read execution questionnaire.",
+      });
+    }
+  },
+);
+app.post<{
+  Params: { runId: string };
+  Body: {
+    questionnaireId: string;
+    answers: Record<string, string>;
+  };
+}>("/api/runs/:runId/questions/answers", async (request, reply) => {
+  try {
+    return await repository.answerExecutionQuestionnaire({
+      runId: request.params.runId,
+      questionnaireId: request.body?.questionnaireId,
+      answers: request.body?.answers ?? {},
+      answeredBy: "local-operator",
+    });
+  } catch (cause) {
+    return reply.code(409).send({
+      error:
+        cause instanceof Error
+          ? cause.message
+          : "Unable to save questionnaire answers.",
+    });
+  }
+});
+app.get<{ Params: { runId: string } }>(
   "/api/runs/:runId/traceability-context",
   async (request, reply) => {
     try {
@@ -641,7 +770,12 @@ app.get<{ Params: { taskId: string } }>(
       const adapter = request.params.taskId.startsWith("TASK-FAKE-")
         ? adapters.fake
         : adapters.codex_app_server;
-      const task = await adapter.read?.(request.params.taskId);
+      let task = await adapter.read?.(request.params.taskId);
+      if (
+        adapter.recover &&
+        (!task || (task.status.toLowerCase() === "unknown" && !task.output))
+      )
+        task = await adapter.recover(request.params.taskId);
       if (!task)
         return reply.code(404).send({ error: "Task state is unavailable." });
       return task;
@@ -1260,6 +1394,15 @@ app.post<{
   try {
     const activeRun = repository.getRun(request.params.runId);
     if (!activeRun) throw new Error(`Run not found: ${request.params.runId}`);
+    if (["resume", "retry"].includes(request.body?.action)) {
+      const questionnaire = await repository.readCurrentExecutionQuestionnaire(
+        activeRun.runId,
+      );
+      if (questionnaire?.status === "awaiting_input")
+        throw new Error(
+          "Resume blocked: answer every required questionnaire item first.",
+        );
+    }
     if (request.body?.action === "cancel_turn") {
       if (activeRun.status !== "in_progress" || !activeRun.taskId)
         throw new Error("The run has no active Codex turn to cancel.");
@@ -1416,6 +1559,26 @@ app.post<{
           );
         return await advanceAcceptedRun(activeRun);
       }
+      if (!taskSnapshot || taskSnapshot.status.toLowerCase() === "unknown") {
+        const currentPlanId = await packageRunPlanId(
+          activeRun,
+          Math.max(0, activeRun.sequence - 1),
+        );
+        if (!currentPlanId)
+          throw new Error("Run package has no resumable plan.");
+        const nextTask = await retryCurrentImplementationPhase(
+          activeRun,
+          currentPlanId,
+        );
+        return repository.updateRun(activeRun.runId, {
+          status: "in_progress",
+          acceptedSequence: undefined,
+          currentPhase: nextTask.phaseLabel,
+          currentTask: `${nextTask.taskLabel} · Codex task ${nextTask.taskId}`,
+          taskId: nextTask.taskId,
+          adapter: nextTask.adapter,
+        });
+      }
     }
     return repository.updateRun(request.params.runId, { status });
   } catch (cause) {
@@ -1483,6 +1646,7 @@ const taskMonitor = setInterval(() => {
         currentRun.taskId !== run.taskId
       )
         return;
+      const blocker = executionProgressBlocker(progress);
       if (["failed", "error", "cancelled", "canceled"].includes(normalized))
         repository.updateRun(run.runId, {
           status: "failed",
@@ -1491,7 +1655,64 @@ const taskMonitor = setInterval(() => {
               ? `Phase failed · ${task.error || task.output}`
               : `Codex task ${run.taskId} ${normalized}`,
         });
-      else if (normalized === "blocked")
+      else if ((!task || normalized === "unknown") && !blocker) {
+        try {
+          const currentPlanId = await packageRunPlanId(
+            currentRun,
+            Math.max(0, currentRun.sequence - 1),
+          );
+          if (!currentPlanId)
+            throw new Error("Run package has no current implementation plan.");
+          const nextTask = await retryCurrentImplementationPhase(
+            currentRun,
+            currentPlanId,
+          );
+          const latestRun = repository.getRun(run.runId);
+          if (
+            latestRun?.status !== "in_progress" ||
+            latestRun.taskId !== run.taskId
+          )
+            return;
+          repository.updateRun(run.runId, {
+            status: "in_progress",
+            currentPhase: nextTask.phaseLabel,
+            currentTask: `${nextTask.taskLabel} · Codex task ${nextTask.taskId}`,
+            taskId: nextTask.taskId,
+            adapter: nextTask.adapter,
+          });
+        } catch (cause) {
+          repository.updateRun(run.runId, {
+            status: "blocked",
+            currentTask:
+              cause instanceof Error
+                ? `Unable to restart the implementation turn: ${cause.message}`
+                : "Unable to restart the implementation turn.",
+          });
+        }
+      } else if (
+        blocker &&
+        progress &&
+        ["blocked", "completed", "complete", "succeeded"].includes(normalized)
+      ) {
+        try {
+          const questionnaire = await persistExecutionQuestionnaire(
+            currentRun,
+            progress,
+            task?.output ?? "",
+          );
+          repository.updateRun(run.runId, {
+            status: blocker.status,
+            currentTask: questionnaire
+              ? `Awaiting operator answers · ${questionnaire.questionnaire_id}`
+              : blocker.message,
+          });
+        } catch (cause) {
+          repository.updateRun(run.runId, {
+            status: "blocked",
+            currentTask: `Questionnaire could not be saved: ${cause instanceof Error ? cause.message : String(cause)}`,
+          });
+        }
+      } else if (normalized === "blocked")
         repository.updateRun(run.runId, {
           status: "blocked",
           currentTask:
@@ -1539,17 +1760,47 @@ const taskMonitor = setInterval(() => {
               : `Run plan ended before every status was green · ${gate.reasons.join(" ")}`,
           });
         } catch (cause) {
+          let stopCause: unknown = cause;
           const latestRun = repository.getRun(run.runId);
           if (
             latestRun?.status !== "in_progress" ||
             latestRun.taskId !== run.taskId
           )
             return;
+          if (
+            cause instanceof Error &&
+            cause.message.startsWith(
+              "Current phase functionality is incomplete",
+            )
+          ) {
+            try {
+              const nextTask = await retryCurrentImplementationPhase(
+                currentRun,
+                currentPlanId,
+              );
+              const resumedRun = repository.getRun(run.runId);
+              if (
+                resumedRun?.status !== "in_progress" ||
+                resumedRun.taskId !== run.taskId
+              )
+                return;
+              repository.updateRun(run.runId, {
+                status: "in_progress",
+                currentPhase: nextTask.phaseLabel,
+                currentTask: `${nextTask.taskLabel} · Codex task ${nextTask.taskId}`,
+                taskId: nextTask.taskId,
+                adapter: nextTask.adapter,
+              });
+              return;
+            } catch (retryCause) {
+              stopCause = retryCause;
+            }
+          }
           repository.updateRun(run.runId, {
             status: "blocked",
             currentTask:
-              cause instanceof Error
-                ? `Phase stopped: ${cause.message}`
+              stopCause instanceof Error
+                ? `Phase stopped: ${stopCause.message}`
                 : "Phase stopped before its functionality was complete.",
           });
         }

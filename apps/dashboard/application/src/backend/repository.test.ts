@@ -1348,6 +1348,115 @@ describe("DeliveryRepository", () => {
     });
   });
 
+  it("persists, answers, and closes a blocking execution questionnaire", async () => {
+    const config = await fixture();
+    const state = new RuntimeState(config.runtimeDirectory);
+    states.push(state);
+    config.schemaDirectory = path.resolve(process.cwd(), "../../../schemas");
+    const registry = new SchemaRegistry(config);
+    await registry.load();
+    const repository = new DeliveryRepository(config, state, registry);
+    const snapshot = await repository.snapshot();
+    const requirement = snapshot.artifacts.find(
+      (artifact) => artifact.kind === "requirement",
+    )!;
+    const plan = snapshot.artifacts.find(
+      (artifact) => artifact.kind === "run_plan",
+    )!;
+    await repository.recordDecision({
+      artifactId: requirement.id,
+      kind: "requirement",
+      decision: "approved",
+    });
+    await repository.recordDecision({
+      artifactId: plan.id,
+      kind: "run_plan",
+      decision: "approved",
+    });
+    state.startRun({
+      runId: "RUN-QA-001",
+      workPackageId: "WP-QA-001",
+      title: "Questionnaire test",
+      sequence: 1,
+      total: 1,
+      currentPhase: "PH-01",
+      currentTask: "TASK-01-01",
+      progress: 0,
+      status: "in_progress",
+      model: "gpt-5.6-luna",
+      reasoningEffort: "high",
+    });
+    const execution = await repository.prepareExecutionProgress({
+      runId: "RUN-QA-001",
+      workPackageId: "WP-QA-001",
+      runPlanId: plan.id,
+    });
+    const questionnaire = await repository.createExecutionQuestionnaire({
+      runId: "RUN-QA-001",
+      phaseId: execution.firstPhaseId,
+      taskId: execution.firstTaskId,
+      questions: [
+        {
+          id: "Q-001",
+          blocking: true,
+          question: "Which supported Odoo version should be used?",
+          reason: "The implementation hook differs by version.",
+          answer_type: "single_choice",
+          options: ["Odoo 17", "Odoo 18"],
+          recommended_answer: "Odoo 18",
+        },
+      ],
+    });
+    expect(questionnaire).toMatchObject({
+      status: "awaiting_input",
+      phase_id: execution.firstPhaseId,
+      task_id: execution.firstTaskId,
+    });
+    const questionnairePath = path.join(
+      config.deliveryRepository,
+      "runs",
+      "RUN-QA-001",
+      "questions",
+      `${questionnaire.questionnaire_id}.yaml`,
+    );
+    expect(parse(await fs.readFile(questionnairePath, "utf8"))).toMatchObject({
+      questionnaire_id: questionnaire.questionnaire_id,
+    });
+    await expect(
+      repository.answerExecutionQuestionnaire({
+        runId: "RUN-QA-001",
+        questionnaireId: questionnaire.questionnaire_id,
+        answers: {},
+      }),
+    ).rejects.toThrow("An answer is required");
+    const answered = await repository.answerExecutionQuestionnaire({
+      runId: "RUN-QA-001",
+      questionnaireId: questionnaire.questionnaire_id,
+      answers: { "Q-001": "Odoo 18" },
+    });
+    expect(answered).toMatchObject({
+      status: "answered",
+      revision: 2,
+      questions: [{ status: "answered", answer: "Odoo 18" }],
+    });
+    await expect(
+      repository.answerExecutionQuestionnaire({
+        runId: "RUN-QA-001",
+        questionnaireId: questionnaire.questionnaire_id,
+        answers: { "Q-001": "Odoo 17" },
+      }),
+    ).rejects.toThrow("already final");
+    await expect(
+      repository.markExecutionQuestionnaireResumed(
+        "RUN-QA-001",
+        questionnaire.questionnaire_id,
+      ),
+    ).resolves.toMatchObject({ status: "resumed", revision: 3 });
+    await expect(
+      repository.readCurrentExecutionQuestionnaire("RUN-QA-001"),
+    ).resolves.toBeNull();
+  });
+
   it("rejects artifacts whose filesystem target escapes through a symlink", async () => {
     const config = await fixture();
     const outside = path.join(

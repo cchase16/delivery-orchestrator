@@ -228,6 +228,7 @@ describe("dashboard HTTP integration", () => {
           taskType: "run_plan_generation",
           status: "completed",
           adapter: "fake",
+          inputArtifactIds: [requirementArtifact.id],
         }),
       ]),
     );

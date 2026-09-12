@@ -4,6 +4,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { promisify } from "node:util";
 import type {
+  ExecutionQuestion,
   PromptPacket,
   PromptProfile,
   ReasoningEffort,
@@ -23,8 +24,98 @@ const templateVersions = {
 
 const runPlanTemplateDirectory = path.join("templates", "run-plan");
 
+export interface ExecutionQuestionnaireDraft {
+  phase_id: string;
+  task_id: string;
+  questions: Array<
+    Pick<
+      ExecutionQuestion,
+      | "id"
+      | "blocking"
+      | "question"
+      | "reason"
+      | "answer_type"
+      | "options"
+      | "recommended_answer"
+    >
+  >;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+export function extractExecutionQuestionnaire(
+  output: string,
+): ExecutionQuestionnaireDraft | null {
+  const match = output.match(/```execution-questionnaire\s*([\s\S]*?)```/i);
+  if (!match) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(match[1]);
+  } catch (cause) {
+    throw new Error(
+      `Execution questionnaire is not valid JSON: ${cause instanceof Error ? cause.message : String(cause)}`,
+    );
+  }
+  if (!isRecord(value))
+    throw new Error("Execution questionnaire must be a JSON object.");
+  const phaseId = String(value.phase_id ?? "").trim();
+  const taskId = String(value.task_id ?? "").trim();
+  if (!phaseId || !taskId)
+    throw new Error("Execution questionnaire requires phase_id and task_id.");
+  if (!Array.isArray(value.questions) || value.questions.length === 0)
+    throw new Error("Execution questionnaire requires at least one question.");
+  const seen = new Set<string>();
+  const questions = value.questions.map((candidate, index) => {
+    if (!isRecord(candidate))
+      throw new Error(
+        `Execution questionnaire question ${index + 1} is invalid.`,
+      );
+    const id = String(candidate.id ?? "").trim();
+    const question = String(candidate.question ?? "").trim();
+    const reason = String(candidate.reason ?? "").trim();
+    const answerType = String(candidate.answer_type ?? "text");
+    if (!/^Q-[A-Za-z0-9][A-Za-z0-9._-]{1,63}$/.test(id) || seen.has(id))
+      throw new Error(
+        `Execution questionnaire question id is invalid or duplicated: ${id || index + 1}.`,
+      );
+    seen.add(id);
+    if (!question || !reason || candidate.blocking !== true)
+      throw new Error(
+        `Execution questionnaire ${id} must be blocking and include a question and reason.`,
+      );
+    if (
+      !(["text", "single_choice"] as const).includes(
+        answerType as "text" | "single_choice",
+      )
+    )
+      throw new Error(
+        `Execution questionnaire ${id} has an unsupported answer_type.`,
+      );
+    const options = Array.isArray(candidate.options)
+      ? candidate.options
+          .map(String)
+          .map((item) => item.trim())
+          .filter(Boolean)
+      : undefined;
+    if (answerType === "single_choice" && (!options || options.length < 2))
+      throw new Error(
+        `Execution questionnaire ${id} requires at least two options.`,
+      );
+    return {
+      id,
+      blocking: true as const,
+      question,
+      reason,
+      answer_type: answerType as "text" | "single_choice",
+      ...(options ? { options } : {}),
+      ...(candidate.recommended_answer
+        ? { recommended_answer: String(candidate.recommended_answer).trim() }
+        : {}),
+    };
+  });
+  return { phase_id: phaseId, task_id: taskId, questions };
 }
 
 function requirementName(content: string, fallback: string): string {
@@ -135,6 +226,10 @@ export class PromptBuilder {
       firstTaskTitle: string;
       phaseOrdinal: number;
       phaseCount: number;
+      questionnaire?: {
+        path: string;
+        questions: Array<{ id: string; question: string; answer: string }>;
+      };
     },
   ): Promise<PromptPacket> {
     const expectedMode = "standard";
@@ -268,6 +363,7 @@ export class PromptBuilder {
               "The execution-progress file is the only workflow status document you may edit; preserve its identifiers and JSON structure.",
               "When beginning a task, mark it in_progress. When it is finished and verified, mark it complete. Mark a phase complete only when every task in that phase is complete.",
               "A critical blocker is an issue that prevents the assigned phase's functionality, objective, verification, or exit criteria from being completed. For a critical blocker, mark the affected task, assigned phase, and overall execution blocked, add a concrete note, and stop.",
+              "If that critical blocker is an unanswered question requiring an operator decision, your final response must include exactly one fenced `execution-questionnaire` JSON object before you stop. It must contain phase_id, task_id, and one or more questions. Each question must contain a unique Q- identifier, blocking=true, question, reason, answer_type (`text` or `single_choice`), optional options, and optional recommended_answer. Do not write the questionnaire to disk; the dashboard creates the durable artifact. Do not create a questionnaire for a non-critical issue.",
               "A non-critical issue does not prevent the assigned phase's functionality, objective, verification, or exit criteria. Record it in the relevant note, keep working, and do not set a blocked status solely because of it.",
               "For an intermediate phase, leave overall execution in_progress after the phase is complete. For the final phase, set overall execution complete after the phase and all plan tasks are complete. Never mark incomplete work complete.",
               "Do not begin another run plan. The dashboard will start the next sequenced plan only after this plan's execution, validation, and acceptance statuses are green.",
@@ -295,6 +391,22 @@ export class PromptBuilder {
                   `- Work package: ${execution.workPackageId}`,
                   `- Approved run plan: ${documents[0]?.artifact.id} revision ${documents[0]?.artifact.revision}`,
                   `- Progress file: ${execution.progressFilePath}`,
+                  ...(execution.questionnaire
+                    ? [
+                        `- Answered questionnaire: ${execution.questionnaire.path}`,
+                      ]
+                    : []),
+                ]
+              : []),
+            ...(execution?.questionnaire
+              ? [
+                  "",
+                  "Authoritative operator answers:",
+                  ...execution.questionnaire.questions.flatMap((question) => [
+                    `- ${question.id}: ${question.question}`,
+                    `  Answer: ${question.answer}`,
+                  ]),
+                  "Use these answers to resolve the blocker and continue from the current incomplete task. Do not ask the same question again unless the answer is internally contradictory or technically insufficient; if so, generate a focused follow-up questionnaire.",
                 ]
               : []),
             "",
@@ -450,6 +562,7 @@ export interface ExecutionAdapter {
     actualReasoningEffort: PromptPacket["reasoningEffort"];
   }>;
   read?(taskId: string): Promise<CodexTaskSnapshot>;
+  recover?(taskId: string): Promise<CodexTaskSnapshot>;
   interrupt?(taskId: string): Promise<void>;
   abandon?(taskId: string): Promise<void>;
   close?(): Promise<void>;
@@ -656,6 +769,25 @@ export function summarizeCodexTurn(
   };
 }
 
+export function summarizePersistedCodexThread(
+  taskId: string,
+  value: unknown,
+): CodexTaskSnapshot {
+  const thread = isRecord(value) ? value : null;
+  const turns = Array.isArray(thread?.turns)
+    ? thread.turns.filter(isRecord)
+    : [];
+  const turn = turns.at(-1);
+  if (!turn) return { taskId, status: "unknown", output: "", events: [] };
+  const items = Array.isArray(turn.items) ? turn.items.filter(isRecord) : [];
+  const events: Array<Record<string, unknown>> = items.map((item) => ({
+    method: "item/completed",
+    params: { item },
+  }));
+  events.push({ method: "turn/completed", params: { turn } });
+  return summarizeCodexTurn(taskId, events, String(turn.id ?? ""), 0, false);
+}
+
 export interface FakeExecutionBehavior {
   status?: string;
   output?: string;
@@ -747,6 +879,10 @@ export class FakeExecutionAdapter implements ExecutionAdapter {
     );
   }
 
+  async recover(taskId: string): Promise<CodexTaskSnapshot> {
+    return this.read(taskId);
+  }
+
   async interrupt(taskId: string): Promise<void> {
     const task = this.tasks.get(taskId);
     if (task) this.tasks.set(taskId, { ...task, status: "cancelled" });
@@ -786,6 +922,7 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
       turnEventOffset: number;
     }
   >();
+  private readonly recoveredSnapshots = new Map<string, CodexTaskSnapshot>();
 
   private awaitResponse(
     lines: readline.Interface,
@@ -1114,6 +1251,16 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
   async read(taskId: string): Promise<CodexTaskSnapshot> {
     const session = this.sessions.get(taskId);
     const completed = this.completedEvents.get(taskId);
+    if (!session && !completed) {
+      return (
+        this.recoveredSnapshots.get(taskId) ?? {
+          taskId,
+          status: "unknown",
+          output: "",
+          events: [],
+        }
+      );
+    }
     const events = session?.events ?? completed?.events ?? [];
     const turnId = session?.turnId ?? completed?.turnId ?? "";
     const turnEventOffset =
@@ -1125,6 +1272,52 @@ export class CodexAppServerAdapter implements ExecutionAdapter {
       turnEventOffset,
       Boolean(session),
     );
+  }
+
+  async recover(taskId: string): Promise<CodexTaskSnapshot> {
+    const current = await this.read(taskId);
+    if (current.status !== "unknown" || current.output) return current;
+    const runtime = await resolveCodexRuntime();
+    const child = spawn(
+      runtime.executable,
+      ["app-server", "--listen", "stdio://"],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+    if (!child.stdout || !child.stdin)
+      throw new Error("Codex App Server stdio pipes are unavailable.");
+    const lines = readline.createInterface({ input: child.stdout });
+    let diagnostics = "";
+    child.stderr?.on("data", (chunk) => {
+      diagnostics = `${diagnostics}${String(chunk)}`.slice(-4000);
+    });
+    const send = (method: string, params: unknown, id?: number) => {
+      child.stdin!.write(
+        `${JSON.stringify({ method, ...(id === undefined ? {} : { id }), params })}\n`,
+      );
+    };
+    try {
+      const initializeResponse = this.awaitResponse(lines, child, 1);
+      send("initialize", codexAppServerInitializeParams(), 1);
+      await initializeResponse;
+      send("initialized", {});
+      const readResponse = this.awaitResponse(lines, child, 2, 15000);
+      send("thread/read", { threadId: taskId, includeTurns: true }, 2);
+      const response = await readResponse;
+      const snapshot = summarizePersistedCodexThread(
+        taskId,
+        response.result?.thread,
+      );
+      this.recoveredSnapshots.set(taskId, snapshot);
+      return snapshot;
+    } catch (cause) {
+      const detail = diagnostics.trim();
+      throw new Error(
+        `${cause instanceof Error ? cause.message : "Unable to recover Codex task."}${detail ? ` · ${detail}` : ""}`,
+      );
+    } finally {
+      lines.close();
+      child.kill();
+    }
   }
 
   async interrupt(taskId: string): Promise<void> {

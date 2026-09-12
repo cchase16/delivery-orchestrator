@@ -1153,6 +1153,53 @@ h2 {
   flex: 0 0 auto;
   margin-top: 1px;
 }
+.execution-questionnaire {
+  padding-bottom: 16px;
+  border-color: #dfc57c;
+  background: #fffcf2;
+}
+.execution-questionnaire > p {
+  margin: 0;
+  padding: 0 16px 14px;
+  color: #675b3e;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.questionnaire-fields {
+  display: grid;
+  gap: 12px;
+  padding: 0 16px;
+}
+.questionnaire-fields label {
+  display: grid;
+  gap: 7px;
+  padding: 14px;
+  border: 1px solid #eadcae;
+  border-radius: 6px;
+  background: #fff;
+  color: #253a55;
+  font-size: 13px;
+}
+.questionnaire-fields label > small {
+  color: #718096;
+  line-height: 1.45;
+}
+.questionnaire-fields select,
+.questionnaire-fields textarea {
+  width: 100%;
+  padding: 10px 11px;
+  border: 1px solid #ccd7e3;
+  border-radius: 6px;
+  background: #fbfcfe;
+  color: #29415e;
+  font: inherit;
+}
+.questionnaire-fields textarea {
+  resize: vertical;
+}
+.execution-questionnaire .detail-actions {
+  padding: 0 16px;
+}
 .task-activity {
   max-height: 22rem;
   overflow: auto;
@@ -2054,6 +2101,38 @@ h2 {
   .active-summary {
     align-items: flex-start;
     flex-direction: column;
+  }
+  .active-run-panel {
+    padding: 16px;
+  }
+  .run-hero {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .run-hero > .status-badge {
+    margin-left: 62px;
+  }
+  .run-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .run-grid > div {
+    min-width: 0;
+    padding: 8px 12px;
+    overflow-wrap: anywhere;
+  }
+  .run-grid > div:first-child {
+    padding-left: 12px;
+  }
+  .execution-questionnaire .panel-title {
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .execution-questionnaire .panel-title > div {
+    min-width: 0;
+  }
+  .questionnaire-fields label > span {
+    line-height: 1.45;
+    overflow-wrap: anywhere;
   }
   .progress-wrap {
     width: 100%;

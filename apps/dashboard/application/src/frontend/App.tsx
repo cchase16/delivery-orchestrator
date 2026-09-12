@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import {
@@ -36,6 +36,7 @@ import {
 import type {
   ApprovalSummary,
   ArtifactSummary,
+  ExecutionQuestionnaire,
   ExecutionProgress,
   PreflightResult,
   PromptProfile,
@@ -72,6 +73,10 @@ type PromptTaskMonitor = {
   model: string;
   reasoningEffort: string;
   startedAt: string;
+  inputArtifactIds?: string[];
+  promptMode?: string;
+  templateVersion?: string;
+  redactionApplied?: boolean;
 };
 type DashboardCapabilities = {
   models: string[];
@@ -325,8 +330,8 @@ function PromptTaskActivity({
         <span className="section-kicker">GENERATION ACTIVITY</span>
         <h3>Recent run-plan tasks</h3>
         <p>
-          Running tasks update automatically. Output is available while the
-          dashboard process owns the task.
+          Running tasks update automatically. Completed output can be recovered
+          from the persisted Codex task.
         </p>
       </div>
       {visibleTasks.map((task) => {
@@ -348,9 +353,7 @@ function PromptTaskActivity({
               </div>
               <StatusBadge status={task.status} />
             </div>
-            {task.output && (
-              <pre className="task-output">{task.output.slice(-4000)}</pre>
-            )}
+            {task.output && <pre className="task-output">{task.output}</pre>}
             <div className="prompt-task-row-footer">
               <span>{task.events.length} events received</span>
               {isActive && (
@@ -580,7 +583,7 @@ export default function App() {
               onResetRepository={async () => {
                 if (
                   !window.confirm(
-                    "Reset all approval decisions and workflow gates? Requirements, run plans, work packages, system plans, evidence, and releases will be kept.",
+                    "Reset all approval decisions and workflow gates? Design documents, run plans, work packages, system plans, evidence, and releases will be kept.",
                   )
                 )
                   return;
@@ -702,16 +705,17 @@ function Sidebar({
       <nav aria-label="Primary navigation">
         {items.map((item) => {
           const Icon = pageIcons[item];
+          const label = item === "Requirements" ? "Design documents" : item;
           return (
             <button
               key={item}
               className={page === item ? "nav-item active" : "nav-item"}
               onClick={() => onNavigate(item)}
               aria-current={page === item ? "page" : undefined}
-              aria-label={item}
+              aria-label={label}
             >
               <Icon size={18} />
-              <span>{item}</span>
+              <span>{label}</span>
               {item === "Approvals" && approvalCount > 0 && (
                 <span className="nav-count">{approvalCount}</span>
               )}
@@ -918,8 +922,8 @@ function PageContent({
   if (page === "Requirements")
     return (
       <ArtifactPage
-        title="Requirements"
-        description="Review exact requirement revisions before planning."
+        title="Design documents"
+        description="Review exact design document revisions before planning."
         kind="requirement"
         snapshot={snapshot}
         initialArtifactId={focusedArtifactId}
@@ -933,7 +937,7 @@ function PageContent({
     return (
       <ArtifactPage
         title="Run Plans"
-        description="Full phased implementation plans created from approved requirements."
+        description="Full phased implementation plans created from approved design documents."
         kind="run_plan"
         snapshot={snapshot}
         initialArtifactId={focusedArtifactId}
@@ -987,7 +991,7 @@ function OverviewPage({
       <PageHeader
         eyebrow="DELIVERY CONTROL"
         title="Overview"
-        description="End-to-end view of requirements, plans, approvals, and active execution."
+        description="End-to-end view of design documents, plans, approvals, and active execution."
         action={
           <button
             className="primary-button"
@@ -1002,14 +1006,14 @@ function OverviewPage({
       <div className="stat-grid">
         <Stat
           icon={<FileCheck2 />}
-          label="Approved requirements"
+          label="Approved design documents"
           value={String(
             snapshot.artifacts.filter(
               (item) =>
                 item.kind === "requirement" && item.status === "approved",
             ).length || "—",
           )}
-          action="View requirements"
+          action="View design documents"
           onClick={() => onNavigate("Requirements")}
         />
         <Stat
@@ -1368,7 +1372,7 @@ function PlanningPage({ snapshot }: { snapshot: Snapshot }) {
           <div className="rationale-empty">
             <ListChecks size={22} />
             <strong>
-              {requirementsAwaitingPlans.length} approved requirement
+              {requirementsAwaitingPlans.length} approved design document
               {requirementsAwaitingPlans.length === 1 ? "" : "s"} awaiting a run
               plan
             </strong>
@@ -1383,13 +1387,13 @@ function PlanningPage({ snapshot }: { snapshot: Snapshot }) {
       <section className="panel full-panel package-review">
         <div className="panel-title">
           <div>
-            <span className="section-kicker">APPROVED REQUIREMENTS</span>
-            <h2>Requirements awaiting run plans</h2>
+            <span className="section-kicker">APPROVED DESIGN DOCUMENTS</span>
+            <h2>Design documents awaiting run plans</h2>
           </div>
           <span>{requirementsAwaitingPlans.length}</span>
         </div>
         {requirementsAwaitingPlans.length === 0 ? (
-          <EmptyData label="Every approved requirement has an indexed run plan" />
+          <EmptyData label="Every approved design document has an indexed run plan" />
         ) : (
           requirementsAwaitingPlans.map((requirement) => (
             <div className="inbox-row" key={requirement.id}>
@@ -1606,7 +1610,7 @@ function ArtifactPage({
     const requirement = selectedRequirement;
     if (!requirement) {
       setPromptError(
-        "Select an approved requirement revision before creating its run plan.",
+        "Select an approved design document revision before creating its run plan.",
       );
       return;
     }
@@ -1655,7 +1659,7 @@ function ArtifactPage({
     );
     if (!requirement || !profile) {
       setPromptError(
-        "An approved requirement and generation profile are required.",
+        "An approved design document and generation profile are required.",
       );
       return;
     }
@@ -1738,7 +1742,7 @@ function ArtifactPage({
     );
     if (!requirement) {
       setDraftSaveError(
-        "An approved requirement is required to save a run plan.",
+        "An approved design document is required to save a run plan.",
       );
       return;
     }
@@ -1822,11 +1826,65 @@ function ArtifactPage({
       task.status.toLowerCase(),
     ),
   );
+  useEffect(() => {
+    if (kind !== "requirement" || !selectedRequirement) return;
+    if (promptTask && promptTask.requirementId !== selectedRequirement.id) {
+      setPromptTask(null);
+      setPromptTaskSnapshot(null);
+      setPromptPreview(null);
+      setDraftMarkdown("");
+      setPromptError(null);
+      return;
+    }
+    if (promptTask || promptPreview || isStartingRunPlan) return;
+    const recovered = promptTasks.find(
+      (task) =>
+        task.taskType === "run_plan_generation" &&
+        task.inputArtifactIds?.includes(selectedRequirement.id),
+    );
+    if (!recovered) return;
+    setPromptPreview({
+      requirementId: selectedRequirement.id,
+      model: recovered.model,
+      promptMode: recovered.promptMode ?? "standard",
+      reasoningEffort: recovered.reasoningEffort,
+      templateVersion: recovered.templateVersion ?? "run-plan-generation.v3",
+      redactionApplied: recovered.redactionApplied ?? false,
+      prompt: "",
+    });
+    setPromptTask({
+      taskId: recovered.taskId,
+      requirementId: selectedRequirement.id,
+      adapter: recovered.adapter,
+      actualModel: recovered.model,
+      actualReasoningEffort: recovered.reasoningEffort,
+    });
+    setPromptTaskSnapshot({
+      status: recovered.status,
+      output: recovered.output,
+      events: recovered.events,
+    });
+    const extracted = extractRunPlanOutput(recovered.output);
+    if (extracted) setDraftMarkdown(extracted);
+  }, [
+    kind,
+    selectedRequirement?.id,
+    promptTask?.taskId,
+    promptTask?.requirementId,
+    promptPreview,
+    isStartingRunPlan,
+    promptTasks,
+  ]);
+  const recoveredPromptOutput = Boolean(
+    promptTask && promptPreview && !promptPreview.prompt,
+  );
   return (
     <>
       <PageHeader
         eyebrow={
-          kind === "run_plan" ? "IMPLEMENTATION PLANS" : "REQUIREMENT INTAKE"
+          kind === "run_plan"
+            ? "IMPLEMENTATION PLANS"
+            : "DESIGN DOCUMENT INTAKE"
         }
         title={title}
         description={description}
@@ -1839,7 +1897,7 @@ function ArtifactPage({
               title={
                 selectedRequirement
                   ? `Create a run plan for ${selectedRequirement.id}`
-                  : "Select an approved requirement first"
+                  : "Select an approved design document first"
               }
             >
               <Zap size={16} />
@@ -1938,10 +1996,24 @@ function ArtifactPage({
           <section className="panel prompt-preview">
             <div className="panel-title">
               <div>
-                <span className="section-kicker">PROMPT PREVIEW</span>
-                <h2>Run-plan generation packet</h2>
+                <span className="section-kicker">
+                  {recoveredPromptOutput
+                    ? "RECOVERED OUTPUT"
+                    : "PROMPT PREVIEW"}
+                </span>
+                <h2>
+                  {recoveredPromptOutput
+                    ? "Completed run-plan generation"
+                    : "Run-plan generation packet"}
+                </h2>
               </div>
-              <StatusBadge status="ready" />
+              <StatusBadge
+                status={
+                  recoveredPromptOutput
+                    ? (promptTaskSnapshot?.status ?? "recovered")
+                    : "ready"
+                }
+              />
             </div>
             <div className="detail-meta">
               <span title={selectedRequirement?.title}>
@@ -1971,63 +2043,67 @@ function ArtifactPage({
                 </span>
               )}
             </div>
-            <div className="prompt-controls">
-              <label>
-                Effective model
-                <select
-                  value={promptPreview.model}
-                  onChange={(event) =>
-                    setPromptPreview({
-                      ...promptPreview,
-                      model: event.target.value,
-                    })
-                  }
+            {!recoveredPromptOutput && (
+              <div className="prompt-controls">
+                <label>
+                  Effective model
+                  <select
+                    value={promptPreview.model}
+                    onChange={(event) =>
+                      setPromptPreview({
+                        ...promptPreview,
+                        model: event.target.value,
+                      })
+                    }
+                  >
+                    <option>gpt-5.6-sol</option>
+                    <option>gpt-5.6-luna</option>
+                    <option>gpt-5.6-terra</option>
+                  </select>
+                </label>
+                <label>
+                  Effective reasoning
+                  <select
+                    value={promptPreview.reasoningEffort}
+                    onChange={(event) =>
+                      setPromptPreview({
+                        ...promptPreview,
+                        reasoningEffort: event.target.value,
+                      })
+                    }
+                  >
+                    <option>low</option>
+                    <option>medium</option>
+                    <option>high</option>
+                    <option>xhigh</option>
+                  </select>
+                </label>
+              </div>
+            )}
+            {!recoveredPromptOutput && (
+              <div className="detail-actions">
+                <button
+                  className="primary-button"
+                  onClick={() => void startRunPlanGeneration()}
+                  disabled={isStartingRunPlan || Boolean(activePromptTask)}
+                  aria-busy={isStartingRunPlan}
                 >
-                  <option>gpt-5.6-sol</option>
-                  <option>gpt-5.6-luna</option>
-                  <option>gpt-5.6-terra</option>
-                </select>
-              </label>
-              <label>
-                Effective reasoning
-                <select
-                  value={promptPreview.reasoningEffort}
-                  onChange={(event) =>
-                    setPromptPreview({
-                      ...promptPreview,
-                      reasoningEffort: event.target.value,
-                    })
-                  }
-                >
-                  <option>low</option>
-                  <option>medium</option>
-                  <option>high</option>
-                  <option>xhigh</option>
-                </select>
-              </label>
-            </div>
-            <div className="detail-actions">
-              <button
-                className="primary-button"
-                onClick={() => void startRunPlanGeneration()}
-                disabled={isStartingRunPlan || Boolean(activePromptTask)}
-                aria-busy={isStartingRunPlan}
-              >
-                {isStartingRunPlan || activePromptTask ? (
-                  <Loader2 className="spin" size={15} />
-                ) : (
-                  <Play size={15} />
-                )}
-                {isStartingRunPlan
-                  ? "Starting…"
-                  : activePromptTask
-                    ? "Generation already running"
-                    : "Start standard prompt"}
-              </button>
-              <span className="muted-label">
-                Template {promptPreview.templateVersion}
-              </span>
-            </div>
+                  {isStartingRunPlan || activePromptTask ? (
+                    <Loader2 className="spin" size={15} />
+                  ) : (
+                    <Play size={15} />
+                  )}
+                  {isStartingRunPlan
+                    ? "Starting…"
+                    : activePromptTask
+                      ? "Generation already running"
+                      : "Start standard prompt"}
+                </button>
+                <span className="muted-label">
+                  Template {promptPreview.templateVersion}
+                </span>
+              </div>
+            )}
             {(isStartingRunPlan || promptTask || promptError) && (
               <div
                 className="progress-overlay prompt-task-progress"
@@ -2065,9 +2141,7 @@ function ArtifactPage({
                   </small>
                 )}
                 {promptTaskSnapshot?.output && (
-                  <pre className="task-output">
-                    {promptTaskSnapshot.output.slice(-4000)}
-                  </pre>
+                  <pre className="task-output">{promptTaskSnapshot.output}</pre>
                 )}
                 {promptTask &&
                   ["starting", "queued", "running", "inprogress"].includes(
@@ -2091,7 +2165,7 @@ function ArtifactPage({
                 )}
               </div>
             )}
-            <pre>{promptPreview.prompt}</pre>
+            {promptPreview.prompt && <pre>{promptPreview.prompt}</pre>}
             {promptTask &&
               !new URLSearchParams(window.location.search).has("demo") && (
                 <div className="draft-output">
@@ -2380,7 +2454,7 @@ function ArtifactDetail({
             }
           >
             <FileText size={15} />
-            View source requirement
+            View source design document
           </button>
         )}
         <button
@@ -3155,7 +3229,7 @@ function WorkPackagesPage({
                             <strong>{plan?.title ?? member.run_plan_id}</strong>
                             <span>
                               {plan?.relatedRequirementId ??
-                                "Requirement unavailable"}
+                                "Design document unavailable"}
                               · revision {member.revision}
                             </span>
                             <small>
@@ -3301,6 +3375,14 @@ function ActiveRunsPage({
   const [changedFiles, setChangedFiles] = useState<
     Array<{ path: string; change: string; classification: string }>
   >([]);
+  const [questionnaire, setQuestionnaire] =
+    useState<ExecutionQuestionnaire | null>(null);
+  const [questionAnswers, setQuestionAnswers] = useState<
+    Record<string, string>
+  >({});
+  const [questionError, setQuestionError] = useState<string | null>(null);
+  const [isSubmittingAnswers, setIsSubmittingAnswers] = useState(false);
+  const questionnaireIdRef = useRef<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [taskSnapshot, setTaskSnapshot] = useState<{
     taskId: string;
@@ -3330,15 +3412,38 @@ function ActiveRunsPage({
       setProgress(null);
       setTaskSnapshot(null);
       setChangedFiles([]);
+      setQuestionnaire(null);
+      setQuestionAnswers({});
+      questionnaireIdRef.current = null;
       return;
     }
     let cancelled = false;
     const refresh = async () => {
-      const progressResponse = await fetch(
-        `/api/runs/${encodeURIComponent(runId)}/progress`,
-      );
+      const [progressResponse, questionnaireResponse] = await Promise.all([
+        fetch(`/api/runs/${encodeURIComponent(runId)}/progress`),
+        fetch(`/api/runs/${encodeURIComponent(runId)}/questions`),
+      ]);
       if (!cancelled && progressResponse.ok)
         setProgress((await progressResponse.json()) as ExecutionProgress);
+      if (!cancelled && questionnaireResponse.ok) {
+        const result = (await questionnaireResponse.json()) as {
+          questionnaire?: ExecutionQuestionnaire | null;
+        };
+        const nextQuestionnaire = result.questionnaire ?? null;
+        setQuestionnaire(nextQuestionnaire);
+        const nextId = nextQuestionnaire?.questionnaire_id ?? null;
+        if (questionnaireIdRef.current !== nextId) {
+          questionnaireIdRef.current = nextId;
+          setQuestionAnswers(
+            Object.fromEntries(
+              (nextQuestionnaire?.questions ?? []).map((question) => [
+                question.id,
+                question.answer ?? "",
+              ]),
+            ),
+          );
+        }
+      }
       const taskId = run?.taskId;
       if (!taskId) return;
       const taskResponse = await fetch(
@@ -3407,6 +3512,49 @@ function ActiveRunsPage({
   const attentionRequests =
     taskSnapshot?.activity?.filter((item) => item.kind === "request").length ??
     0;
+  const unansweredQuestionCount = questionnaire
+    ? questionnaire.questions.filter(
+        (question) => !questionAnswers[question.id]?.trim(),
+      ).length
+    : 0;
+  async function answerQuestionsAndResume() {
+    if (!run || !questionnaire) return;
+    setIsSubmittingAnswers(true);
+    setQuestionError(null);
+    try {
+      if (questionnaire.status === "awaiting_input") {
+        const response = await fetch(
+          `/api/runs/${encodeURIComponent(run.runId)}/questions/answers`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              questionnaireId: questionnaire.questionnaire_id,
+              answers: questionAnswers,
+            }),
+          },
+        );
+        const result = (await response.json()) as
+          ExecutionQuestionnaire | { error?: string };
+        if (!response.ok)
+          throw new Error(
+            "error" in result && result.error
+              ? result.error
+              : "Unable to save questionnaire answers.",
+          );
+        setQuestionnaire(result as ExecutionQuestionnaire);
+      }
+      await onRunControl(run.runId, "resume");
+    } catch (cause) {
+      setQuestionError(
+        cause instanceof Error
+          ? cause.message
+          : "Unable to answer questions and resume the run.",
+      );
+    } finally {
+      setIsSubmittingAnswers(false);
+    }
+  }
   return (
     <>
       <PageHeader
@@ -3534,6 +3682,115 @@ function ActiveRunsPage({
               <span>{pollError}</span>
             </div>
           )}
+          {questionnaire && (
+            <section
+              className="progress-overlay execution-questionnaire"
+              aria-labelledby="execution-questionnaire-title"
+            >
+              <div className="panel-title">
+                <div>
+                  <span className="section-kicker">
+                    OPERATOR INPUT REQUIRED
+                  </span>
+                  <h2 id="execution-questionnaire-title">
+                    Answer blocking questions
+                  </h2>
+                  <small className="muted-label">
+                    {questionnaire.questionnaire_id} · {questionnaire.phase_id}{" "}
+                    · {questionnaire.task_id}
+                  </small>
+                </div>
+                <StatusBadge status={questionnaire.status} />
+              </div>
+              <p>
+                These answers are saved in the delivery repository and passed to
+                the model when this phase resumes.
+              </p>
+              <div className="questionnaire-fields">
+                {questionnaire.questions.map((question) => {
+                  const inputId = `answer-${questionnaire.questionnaire_id}-${question.id}`;
+                  return (
+                    <label key={question.id} htmlFor={inputId}>
+                      <span>
+                        <strong>{question.id}</strong> {question.question}
+                      </span>
+                      <small>{question.reason}</small>
+                      {question.recommended_answer && (
+                        <small>
+                          Recommended: {question.recommended_answer}
+                        </small>
+                      )}
+                      {question.answer_type === "single_choice" ? (
+                        <select
+                          id={inputId}
+                          value={questionAnswers[question.id] ?? ""}
+                          disabled={questionnaire.status !== "awaiting_input"}
+                          onChange={(event) =>
+                            setQuestionAnswers((answers) => ({
+                              ...answers,
+                              [question.id]: event.target.value,
+                            }))
+                          }
+                        >
+                          <option value="">Select an answer</option>
+                          {question.options?.map((option) => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <textarea
+                          id={inputId}
+                          rows={3}
+                          value={questionAnswers[question.id] ?? ""}
+                          disabled={questionnaire.status !== "awaiting_input"}
+                          onChange={(event) =>
+                            setQuestionAnswers((answers) => ({
+                              ...answers,
+                              [question.id]: event.target.value,
+                            }))
+                          }
+                          placeholder="Enter the operator decision"
+                        />
+                      )}
+                    </label>
+                  );
+                })}
+              </div>
+              {questionError && (
+                <div className="run-task-error" role="alert">
+                  <AlertTriangle size={16} />
+                  <span>{questionError}</span>
+                </div>
+              )}
+              <div className="detail-actions">
+                <button
+                  className="primary-button"
+                  onClick={() => void answerQuestionsAndResume()}
+                  disabled={unansweredQuestionCount > 0 || isSubmittingAnswers}
+                  aria-busy={isSubmittingAnswers}
+                >
+                  {isSubmittingAnswers ? (
+                    <Loader2 className="spin" size={15} />
+                  ) : (
+                    <Play size={15} />
+                  )}
+                  {questionnaire.status === "answered"
+                    ? "Resume with saved answers"
+                    : isSubmittingAnswers
+                      ? "Saving answers…"
+                      : "Save answers and resume"}
+                </button>
+                {unansweredQuestionCount > 0 && (
+                  <span className="muted-label">
+                    {unansweredQuestionCount} required answer
+                    {unansweredQuestionCount === 1 ? "" : "s"} remaining
+                  </span>
+                )}
+              </div>
+            </section>
+          )}
           {changedFiles.length > 0 && (
             <div className="progress-overlay changed-files">
               <div className="panel-title">
@@ -3606,20 +3863,21 @@ function ActiveRunsPage({
                 Cancel active turn
               </button>
             )}
-            {["ready", "in_progress", "blocked"].includes(run.status) && (
-              <button
-                className="secondary-button"
-                onClick={() =>
-                  void onRunControl(
-                    run.runId,
-                    run.status === "blocked" ? "resume" : "pause",
-                  )
-                }
-              >
-                <Play size={15} />
-                {run.status === "blocked" ? "Resume run" : "Pause run"}
-              </button>
-            )}
+            {["ready", "in_progress", "blocked"].includes(run.status) &&
+              !questionnaire && (
+                <button
+                  className="secondary-button"
+                  onClick={() =>
+                    void onRunControl(
+                      run.runId,
+                      run.status === "blocked" ? "resume" : "pause",
+                    )
+                  }
+                >
+                  <Play size={15} />
+                  {run.status === "blocked" ? "Resume run" : "Pause run"}
+                </button>
+              )}
             {["ready", "in_progress", "blocked"].includes(run.status) && (
               <button
                 className="reject-button"
@@ -3629,7 +3887,7 @@ function ActiveRunsPage({
                 Cancel run
               </button>
             )}
-            {["blocked", "failed"].includes(run.status) && (
+            {["blocked", "failed"].includes(run.status) && !questionnaire && (
               <>
                 <button
                   className="secondary-button"
@@ -4231,13 +4489,13 @@ function ValidationPage({
         {traceabilityContext && evidence ? (
           <>
             <p>
-              Review the generated mapping, then submit it to bind each
-              requirement criterion to stable implementation tasks and passing
+              Review the generated mapping, then submit it to bind each design
+              document criterion to stable implementation tasks and passing
               validation checks.
             </p>
             <div className="detail-meta">
               <span>
-                Requirement {traceabilityContext.requirement.id} · revision{" "}
+                Design document {traceabilityContext.requirement.id} · revision{" "}
                 {traceabilityContext.requirement.revision}
               </span>
               <span>
@@ -4614,7 +4872,7 @@ function SettingsPage({
             <h2>Reset decisions and gates</h2>
             <p>
               Removes approval, rejection, workflow-event, disposition, and
-              command records while keeping requirements, run plans, work
+              command records while keeping design documents, run plans, work
               packages, system plans, evidence, and releases.
             </p>
           </div>

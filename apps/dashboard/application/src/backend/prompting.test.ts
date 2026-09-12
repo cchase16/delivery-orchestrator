@@ -8,10 +8,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { DashboardConfig } from "./config.js";
 import {
   codexAppServerInitializeParams,
+  extractExecutionQuestionnaire,
   FakeExecutionAdapter,
   PromptBuilder,
   resolveEffectiveProfile,
   summarizeCodexTurn,
+  summarizePersistedCodexThread,
 } from "./prompting.js";
 import { DeliveryRepository } from "./repository.js";
 import { RuntimeState } from "./state.js";
@@ -242,6 +244,40 @@ describe("PromptBuilder and execution adapters", () => {
     );
   });
 
+  it("reconstructs completed output from a persisted App Server thread", () => {
+    const task = summarizePersistedCodexThread("THREAD-SAVED", {
+      id: "THREAD-SAVED",
+      turns: [
+        {
+          id: "TURN-SAVED",
+          status: "completed",
+          items: [
+            { type: "userMessage", text: "Create the plan." },
+            {
+              type: "agentMessage",
+              text: "```markdown\n# Recovered run plan\n```",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(task).toMatchObject({
+      taskId: "THREAD-SAVED",
+      status: "completed",
+      output: "```markdown\n# Recovered run plan\n```",
+    });
+    expect(task.events).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          params: expect.objectContaining({
+            item: expect.objectContaining({ type: "userMessage" }),
+          }),
+        }),
+      ]),
+    );
+  });
+
   it("resolves explicit overrides without falling back to unsupported settings", () => {
     const profile: PromptProfile = {
       ...generationProfile,
@@ -382,6 +418,16 @@ describe("PromptBuilder and execution adapters", () => {
         firstTaskTitle: "Add the menu service",
         phaseOrdinal: 1,
         phaseCount: 3,
+        questionnaire: {
+          path: "runs/RUN-PROMPT-001/questions/QNR-ONE.yaml",
+          questions: [
+            {
+              id: "Q-001",
+              question: "Which supported version should be used?",
+              answer: "Odoo 18",
+            },
+          ],
+        },
       },
     );
     expect(packet).toMatchObject({
@@ -406,7 +452,39 @@ describe("PromptBuilder and execution adapters", () => {
     );
     expect(packet.prompt).toContain("Do not begin a later phase");
     expect(packet.prompt).toContain("A non-critical issue does not prevent");
+    expect(packet.prompt).toContain("fenced `execution-questionnaire`");
+    expect(packet.prompt).toContain("Authoritative operator answers:");
+    expect(packet.prompt).toContain("Answer: Odoo 18");
     expect(packet.prompt).not.toContain("sk-test-secret-value");
+  });
+
+  it("extracts and validates a structured blocking questionnaire", () => {
+    const questionnaire =
+      extractExecutionQuestionnaire(`Blocked pending a decision.
+
+\`\`\`execution-questionnaire
+{"phase_id":"PH-02","task_id":"TASK-02-01","questions":[{"id":"Q-001","blocking":true,"question":"Which version?","reason":"The API differs.","answer_type":"single_choice","options":["17","18"],"recommended_answer":"18"}]}
+\`\`\``);
+    expect(questionnaire).toEqual({
+      phase_id: "PH-02",
+      task_id: "TASK-02-01",
+      questions: [
+        {
+          id: "Q-001",
+          blocking: true,
+          question: "Which version?",
+          reason: "The API differs.",
+          answer_type: "single_choice",
+          options: ["17", "18"],
+          recommended_answer: "18",
+        },
+      ],
+    });
+    expect(() =>
+      extractExecutionQuestionnaire(`\`\`\`execution-questionnaire
+{"phase_id":"PH-02","task_id":"TASK-02-01","questions":[{"id":"Q-001","blocking":true,"question":"Which version?","reason":"Required.","answer_type":"single_choice"}]}
+\`\`\``),
+    ).toThrow("requires at least two options");
   });
 
   it("covers fake adapter completion, blocked, cancellation, and startup failure", async () => {
