@@ -134,7 +134,7 @@ Display:
 
 - Product, delivery, orchestrator, requirements-factory, and development-factory repositories.
 - Current branch, resolved revision, dirty-worktree state, and repository reachability.
-- Odoo version, edition, module prefix, and configured quality gates.
+- Odoo version, edition, naming-convention source, generic prefix, system and technical-name formats, legacy prefix exceptions, and configured quality gates.
 - System-plan presence and schema status.
 - Codex CLI/App Server availability and authentication state.
 - Active run owner, worktree, and blockers.

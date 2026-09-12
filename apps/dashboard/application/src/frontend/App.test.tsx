@@ -220,7 +220,7 @@ describe("dashboard shell", () => {
               startedAt: "2026-09-11T12:01:00.000Z",
               inputArtifactIds: [requirement.id],
               promptMode: "standard",
-              templateVersion: "run-plan-generation.v3",
+              templateVersion: "run-plan-generation.v4",
               redactionApplied: false,
             },
           ],

@@ -68,6 +68,28 @@
     "Keep the product repository buildable, testable, and deployable without the development factory.",
     "Require backward-compatible installation and upgrade behavior for every shared release."
   ],
+  "naming_convention": {
+    "source_precedence": "design_document_then_system_default",
+    "generic_prefix": "CW",
+    "separator": "_",
+    "system_name_format": "{prefix}_{PascalCaseName}",
+    "odoo_addon_technical_name_format": "{prefix_lower}_{snake_case_name}",
+    "rules": [
+      "Use a naming convention explicitly stated by the approved design document.",
+      "When the approved design document does not state a naming convention, use the generic CW prefix.",
+      "A proposed feature or technical name without a convention statement does not override the system default."
+    ],
+    "examples": [
+      "Alert system name: CW_Alert",
+      "Alert Odoo add-on technical name: cw_alert"
+    ],
+    "legacy_exceptions": [
+      {
+        "name": "customer_form_context_menu",
+        "reason": "Created before the naming convention was specified; retained for compatibility and not a naming precedent."
+      }
+    ]
+  },
   "proposed_work_packages": [
     {
       "work_package_id": "WP-ODOO-SHARED-UX-DISCOVERY",

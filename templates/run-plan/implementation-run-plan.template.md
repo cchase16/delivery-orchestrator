@@ -26,6 +26,14 @@ The approved plan is immutable. During implementation, update progress through t
 
 {{COMPONENTS_MODULES_PACKAGES_AND_RESPONSIBILITY_BOUNDARIES}}
 
+### Naming convention
+
+- **Convention source:** {{EXPLICIT_DESIGN_CONVENTION_OR_SYSTEM_DEFAULT}}
+- **Generic prefix:** `{{GENERIC_PREFIX}}`
+- **System name:** `{{RESOLVED_SYSTEM_NAME}}`
+- **Technical name:** `{{RESOLVED_IMPLEMENTATION_TECHNICAL_NAME}}`
+- **Legacy exceptions:** {{LEGACY_NAMES_OR_NONE}}
+
 ### Data and integrations
 
 {{DATA_MODEL_MIGRATION_API_SECURITY_AND_EXTERNAL_INTEGRATION_CHOICES}}

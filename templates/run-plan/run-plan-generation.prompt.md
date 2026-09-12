@@ -5,6 +5,8 @@ Use the supplied canonical Markdown template. Preserve its section order and req
 Ground the plan in the approved requirement and supplied system context:
 
 - State a concise architecture decision covering the platform, languages, frameworks, module or package boundaries, data or integration choices, and important technical constraints.
+- Apply naming precedence explicitly: use a naming convention stated by the approved design document; otherwise use the system plan's generic prefix. If an older system plan has no naming section, default the generic prefix to `CW`. A suggested feature or technical name without a convention statement does not override that default. Treat existing `Customer`/`customer_` identifiers as legacy names, not naming precedent.
+- Record the resolved system name and implementation-specific technical name in the run plan. For the `CW` default, system names use `CW_<PascalCaseName>` (for example `CW_Alert`) and Odoo add-on technical names use `cw_<snake_case_name>` (for example `cw_alert`).
 - Do not invent repository paths, installed modules, APIs, versions, dependencies, or acceptance criteria. Record a concrete discovery task, assumption, or blocker when the supplied material does not settle a necessary detail.
 - Break implementation into dependency-ordered phases. Give every phase a unique stable identifier in the form `PH-01`, `PH-02`, and so on.
 - Give every development task a unique stable identifier in the form `TASK-01-01`, `TASK-01-02`, and so on. A task must describe a concrete action and its observable deliverable, not merely restate a heading.

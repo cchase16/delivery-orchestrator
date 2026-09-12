@@ -18,7 +18,7 @@ const execFileAsync = promisify(execFile);
 
 const templateVersions = {
   work_package_sequencing: "work-package-sequencing.v1",
-  run_plan_generation: "run-plan-generation.v3",
+  run_plan_generation: "run-plan-generation.v4",
   run_plan_execution: "run-plan-execution.v3",
 } as const;
 
@@ -359,6 +359,7 @@ export class PromptBuilder {
           ? "Suggest an execution sequence only for the supplied approved run plans. Explain dependencies, shared Odoo modules, path overlap, database concerns, conflicts, and risk. Return exactly one JSON object with ordered_run_plan_ids and rationale. Do not rewrite any run plan."
           : [
               "Treat the approved implementation run plan as immutable. The dashboard owns the execution sequence and assigns exactly one phase per turn.",
+              "For naming, the supplied system-plan naming_convention and product factory.yaml are authoritative even when an older approved run plan conflicts with them. An explicit design-document naming convention wins; otherwise use CW_<PascalCaseName> for system names and cw_<snake_case_name> for Odoo add-on technical names. A suggested name alone is not a convention, and existing Customer/customer_ names are legacy exceptions rather than precedent.",
               "Implement only the assigned phase and perform all of that phase's verification work. Do not begin any later phase.",
               "The execution-progress file is the only workflow status document you may edit; preserve its identifiers and JSON structure.",
               "When beginning a task, mark it in_progress. When it is finished and verified, mark it complete. Mark a phase complete only when every task in that phase is complete.",
@@ -467,6 +468,19 @@ export class PromptBuilder {
       );
     } catch {
       sections.push("## Configured system.yaml\n[unavailable]");
+    }
+    try {
+      sections.push(
+        "## Product factory.yaml\n" +
+          (
+            await fs.readFile(
+              path.join(this.config.productRepository, "factory.yaml"),
+              "utf8",
+            )
+          ).slice(0, 12000),
+      );
+    } catch {
+      sections.push("## Product factory.yaml\n[unavailable]");
     }
     const systemPlans = snapshot.artifacts.filter(
       (artifact) => artifact.kind === "system_plan",

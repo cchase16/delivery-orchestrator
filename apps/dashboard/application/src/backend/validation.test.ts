@@ -166,6 +166,20 @@ describe("SchemaRegistry", () => {
         example,
       ).valid,
     ).toBe(true);
+    expect(example.naming_convention).toMatchObject({
+      generic_prefix: "CW",
+      system_name_format: "{prefix}_{PascalCaseName}",
+      odoo_addon_technical_name_format: "{prefix_lower}_{snake_case_name}",
+    });
+
+    const invalidConvention = structuredClone(example);
+    invalidConvention.naming_convention.generic_prefix = "customer";
+    expect(
+      registry.validate(
+        "urn:odoo-development-factory:schema:system-plan:1",
+        invalidConvention,
+      ).valid,
+    ).toBe(false);
   });
 
   it("accepts every checked-in valid example and rejects invalid examples", async () => {

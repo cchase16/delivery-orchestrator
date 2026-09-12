@@ -115,6 +115,10 @@ async function fixture(): Promise<{
     ) + "\n",
   );
   await fs.writeFile(path.join(product, "README.md"), "# Product baseline\n");
+  await fs.writeFile(
+    path.join(product, "factory.yaml"),
+    "conventions:\n  generic_prefix: CW\n  system_name_format: CW_{PascalCaseName}\n  module_prefix: cw_\n  legacy_module_prefixes:\n    - customer_\n",
+  );
   await run("git", ["-C", product, "init", "-q"]);
   await run("git", [
     "-C",
@@ -344,6 +348,13 @@ describe("PromptBuilder and execution adapters", () => {
     expect(packet.prompt).toContain("## Architecture");
     expect(packet.prompt).toContain("## Phased implementation plan");
     expect(packet.prompt).toContain("## Acceptance criteria traceability");
+    expect(packet.templateVersion).toBe("run-plan-generation.v4");
+    expect(packet.prompt).toContain("## Product factory.yaml");
+    expect(packet.prompt).toContain("generic_prefix: CW");
+    expect(packet.prompt).toContain("CW_Alert");
+    expect(packet.prompt).toContain(
+      "existing `Customer`/`customer_` identifiers as legacy names, not naming precedent",
+    );
     expect(packet.prompt).toContain("Do not create JSON or a sidecar");
     expect(packet.prompt).toContain("never approve your own work");
     expect(packet.prompt).not.toContain("sk-test-secret-value");
@@ -439,6 +450,12 @@ describe("PromptBuilder and execution adapters", () => {
     expect(packet.prompt).toContain("Context menu implementation");
     expect(packet.prompt).toContain(
       "Treat the approved implementation run plan as immutable",
+    );
+    expect(packet.prompt).toContain(
+      "system-plan naming_convention and product factory.yaml are authoritative",
+    );
+    expect(packet.prompt).toContain(
+      "existing Customer/customer_ names are legacy exceptions rather than precedent",
     );
     expect(packet.prompt).toContain(
       "Implement only phase 1 of 3: PH-01 (Foundation), starting with TASK-01 (Add the menu service)",

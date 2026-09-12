@@ -13,3 +13,7 @@ system plan is still architectural. The concrete `work-packages/` artifact is
 authoritative for membership and sequencing approval and uses the same
 reference shape in its `members` array. Older examples migrate additively by
 adding `run_plan_refs: []`; no existing system-plan revision is edited in place.
+
+## Naming convention
+
+The optional `naming_convention` object records deterministic naming precedence and formats. An explicitly stated design-document naming convention takes precedence. Otherwise readers use the system plan's `generic_prefix`; older plans without this additive field default to `CW`. A suggested feature or technical name is not itself a convention. Existing `Customer`/`customer_` names may be recorded as legacy exceptions, but they do not establish a convention for new work.

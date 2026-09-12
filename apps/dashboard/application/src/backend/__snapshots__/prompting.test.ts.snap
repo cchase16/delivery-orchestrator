@@ -16,6 +16,6 @@ exports[`PromptBuilder and execution adapters > snapshots the prompt packet cont
   "reasoningEffort": "medium",
   "redactionApplied": true,
   "taskType": "run_plan_generation",
-  "templateVersion": "run-plan-generation.v3",
+  "templateVersion": "run-plan-generation.v4",
 }
 `;

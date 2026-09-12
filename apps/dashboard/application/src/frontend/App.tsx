@@ -1639,7 +1639,7 @@ function ArtifactPage({
         model: result.model ?? "gpt-5.6-sol",
         promptMode: result.promptMode ?? "standard",
         reasoningEffort: result.reasoningEffort ?? "medium",
-        templateVersion: result.templateVersion ?? "run-plan-generation.v3",
+        templateVersion: result.templateVersion ?? "run-plan-generation.v4",
         redactionApplied: result.redactionApplied ?? false,
         prompt: result.prompt ?? "",
       });
@@ -1848,7 +1848,7 @@ function ArtifactPage({
       model: recovered.model,
       promptMode: recovered.promptMode ?? "standard",
       reasoningEffort: recovered.reasoningEffort,
-      templateVersion: recovered.templateVersion ?? "run-plan-generation.v3",
+      templateVersion: recovered.templateVersion ?? "run-plan-generation.v4",
       redactionApplied: recovered.redactionApplied ?? false,
       prompt: "",
     });
